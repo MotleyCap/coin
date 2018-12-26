@@ -5,9 +5,11 @@ mod portfolio;
 use crate::clients::binance::{BinanceClient};
 use crate::clients::client::{ExchangeOps,Balance};
 use crate::clients::cmc::{CMCClient, CMCListingResponse, CMCListing};
+use crate::clients::airtable::{AirtableClient};
 use crate::portfolio::{Portfolio};
 use std::env::{var};
 use std::collections::HashMap;
+use chrono::prelude::*;
 
 #[macro_use]
 extern crate serde_derive;
@@ -15,11 +17,12 @@ extern crate serde;
 extern crate serde_json;
 
 use colored::*;
-use prettytable::{Table, Row, Cell, row, cell};
+use prettytable::{Table, row, cell};
 
 const BINANCE_KEY_NAME: &str = "BINANCE_KEY";
 const BINANCE_SECRET_NAME: &str = "BINANCE_SECRET";
 const CMC_KEY_NAME: &str = "CMC_KEY";
+const AIRTABLE_KEY_NAME: &str = "AIRTABLE_KEY";
 
 fn main() {
     let matches = matches();
@@ -35,8 +38,13 @@ fn main() {
         Ok(k)=> k,
         Err(_) => panic!("Could not find CoinMarketCap key.")
     };
+    let airtable_key = match var(AIRTABLE_KEY_NAME) {
+        Ok(k)=> k,
+        Err(_) => panic!("Could not find Airtable key.")
+    };
     let binance = BinanceClient::new(&key[..], &secret[..]);
     let cmc = CMCClient::new(cmc_key);
+    let airtable = AirtableClient::new(&airtable_key[..], "appxfTKWlfCfBPSLd");
     if let Some(_matches) = matches.subcommand_matches("list") {
         let balances = binance.list();
         let prices = cmc.latest_listings(100);
@@ -54,11 +62,21 @@ fn main() {
         let lookback_i: u64 = lookback.parse().unwrap();
         let factor = _matches.value_of("factor").unwrap_or("0.3");
         let factor_i: f64 = factor.parse().unwrap();
-        let balanced_portfolio = balance_by_market_cap(&cmc, index_size_i, lookback_i, factor_i);
+        // First exit the market to the base currency.
+        let order_ids = binance.exit_market(base_currency.to_owned());
+        let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
+        println!("Successfully exited old positions with order_ids: [{}]", order_ids_str.join(", ").blue());
+        let prices = cmc.latest_listings(100);
+        let balanced_portfolio = balance_by_market_cap(&cmc, &prices.data, index_size_i, lookback_i, factor_i);
         print_portfolio(&balanced_portfolio);
+        // Calculating total value
+        let base_worth = binance.position(base_currency.to_owned());
+        let base_price = prices.data.iter().find(|&p| p.symbol.to_uppercase() == base_currency.to_uppercase()).unwrap();
+        let usd_worth = base_price.quote.get("USD").unwrap().price * base_worth;
         let order_ids = binance.enter_market(base_currency.to_owned(), &balanced_portfolio);
         let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
-        println!("Successfully rebalanced positions with order_ids: [{}]", order_ids_str.join(", ").blue());
+        save_portfolio(&airtable, balanced_portfolio, usd_worth, base_worth);
+        println!("Successfully entered new positions with order_ids: [{}]", order_ids_str.join(", ").blue());
     } else if let Some(_matches) = matches.subcommand_matches("exit") {
         let base_currency = _matches.value_of("base").unwrap_or("BTC");
         if _matches.is_present("position") {
@@ -84,19 +102,39 @@ fn main() {
         let position_to_enter = _matches.value_of("position").unwrap();
         let order_id = binance.market_buy(position_to_enter.to_owned(), base_currency.to_owned(), amount);
         println!("Successfully entered position with order_id: {}", order_id.to_string().green());
+    } else if let Some(_matches) = matches.subcommand_matches("save") {
+        let mut portfolio = HashMap::new();
+        portfolio.insert("BTC".to_owned(), 1.0);
+        save_portfolio(&airtable, portfolio, 4000.0, 1.0);
     } else {
         println!("Unknown command");
     }
 }
 
-fn balance_by_market_cap(cmc: &CMCClient, index_size: u64, lookback: u64, smoothing_factor: f64) -> HashMap<String, f64> {
-    let prices = cmc.latest_listings(100);
+fn save_portfolio(airtable: &AirtableClient, portfolio: HashMap<String, f64>, value_usd: f64, value_btc: f64) {
+    let now = Utc::now();
+    let position_str = serde_json::to_string(&portfolio).unwrap();
+    let value = serde_json::json!({
+        "Timestamp": now.to_string(),
+        "Value (USD)": value_usd,
+        "Value (BTC)": value_btc,
+        "Positions": position_str
+    });
+    airtable.create_record("Portfolio History".to_owned(), &value);
+}
+
+fn balance_by_market_cap(
+    cmc: &CMCClient,
+    prices: &Vec<CMCListing>,
+    index_size: u64,
+    lookback: u64,
+    smoothing_factor: f64) -> HashMap<String, f64> {
     let mut market_caps = HashMap::new();
     let known_assets: Vec<& str> = vec!["ada","ae","aion","ant","bat","bnb","btc","btg","btm","cennz","ctxc","cvc","dai","dash","dcr","dgb","doge","drgn","elf","eng","eos","etc","eth","ethos","fun","gas","gno","gnt","gusd","icn","icx","kcs","knc","loom","lrc","lsk","ltc","maid","mana","mtl","nas","neo","omg","pax","pay","pivx","poly","powr","ppt","qash","rep","rhoc","salt","snt","srn","ven","veri","vtc","waves","wtc","xem","xlm","xmr","xrp","xvg","zec","zil","zrx"];
     let mut seen_assets = 0;
     let mut table = Table::new();
     table.add_row(row!["Symbol", "Count", "Historical Market Caps"]);
-    for price in prices.data {
+    for price in prices {
         if seen_assets >= index_size {
             break;
         }
@@ -114,7 +152,7 @@ fn balance_by_market_cap(cmc: &CMCClient, index_size: u64, lookback: u64, smooth
         let symbol = &price.symbol[..];
         let values_as_string = historical_market_caps.iter().map(|f| f.to_string()).collect::<Vec<String>>().join(",");
         let len = historical_market_caps.len();
-        market_caps.insert(price.symbol.to_owned(), historical_market_caps);
+        market_caps.insert((&price.symbol).to_owned(), historical_market_caps);
         table.add_row(row![
             symbol,
             len,
@@ -151,6 +189,10 @@ fn matches() -> clap::ArgMatches<'static> {
         )
         (@subcommand prices =>
             (about: "list recent prices")
+            (version: "1.0")
+        )
+        (@subcommand save =>
+            (about: "test save portfolio")
             (version: "1.0")
         )
         (@subcommand balance =>
