@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 clap = "~2.27.0"
+toml = "0.4"
 binance = { git = "https://github.com/wisespace-io/binance-rs.git" }
 reqwest = "~0.9.5"
 colored = "1.6"

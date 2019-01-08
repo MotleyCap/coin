@@ -1,20 +1,24 @@
+use std::fs;
+use std::path::{Path};
+use std::env::{var,home_dir};
+use std::collections::HashMap;
+
 use clap::clap_app;
+use chrono::prelude::*;
 
 mod clients;
 mod portfolio;
 use crate::clients::binance::{BinanceClient};
-use crate::clients::client::{ExchangeOps,Balance};
+use crate::clients::client::{ExchangeOps,Balance,Price};
 use crate::clients::cmc::{CMCClient, CMCListingResponse, CMCListing};
 use crate::clients::airtable::{AirtableClient};
 use crate::portfolio::{Portfolio};
-use std::env::{var};
-use std::collections::HashMap;
-use chrono::prelude::*;
 
 #[macro_use]
 extern crate serde_derive;
 extern crate serde;
 extern crate serde_json;
+extern crate toml;
 
 use colored::*;
 use prettytable::{Table, row, cell};
@@ -24,58 +28,128 @@ const BINANCE_SECRET_NAME: &str = "BINANCE_SECRET";
 const CMC_KEY_NAME: &str = "CMC_KEY";
 const AIRTABLE_KEY_NAME: &str = "AIRTABLE_KEY";
 
+#[derive(Deserialize, Serialize)]
+struct Config {
+    pub blacklist: Option<Vec<String>>,
+    pub binance: BinanceConfig,
+    pub cmc: CMCConfig,
+    pub airtable: Option<AirtableConfig>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct BinanceConfig {
+    pub key: String,
+    pub secret: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct CMCConfig {
+    pub key: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct AirtableConfig {
+    pub key: String,
+    pub space: String,
+}
+
+
 fn main() {
     let matches = matches();
-    let key = match var(BINANCE_KEY_NAME) {
-        Ok(k) => k,
-        Err(_) => panic!("Could not find binance key."),
+    let coin_file = if let Some(p) = home_dir() {
+        match fs::read_to_string(p.join(".coin.toml")) {
+            Ok(contents) => {
+                Some(contents)
+            },
+            Err(e) => None
+        }
+    } else {
+        None
     };
-    let secret = match var(BINANCE_SECRET_NAME) {
-        Ok(k) => k,
-        Err(_) => panic!("Could not find binance secret."),
+    let raw_config: Option<Config> = match coin_file {
+        Some(contents) => {
+            let conf: Config = match toml::from_str(&contents) {
+                Ok(conts) => conts,
+                Err(e) => {
+                    panic!(e);
+                }
+            };
+            Some(conf)
+        },
+        None => None
     };
-    let cmc_key = match var(CMC_KEY_NAME) {
-        Ok(k)=> k,
-        Err(_) => panic!("Could not find CoinMarketCap key.")
+    let config: Config = match raw_config {
+        None => panic!("Could not find ~/.coin.toml"),
+        Some(c) => c
     };
-    let airtable_key = match var(AIRTABLE_KEY_NAME) {
-        Ok(k)=> k,
-        Err(_) => panic!("Could not find Airtable key.")
+    let key = config.binance.key.to_owned();
+    let secret = config.binance.secret.to_owned();
+    let cmc_key = config.cmc.key.to_owned();
+    let airtable_key = match &config.airtable {
+        Some(ak) => ak.key.to_owned(),
+        None => "".to_owned()
+    };
+    let airtable_space = match &config.airtable {
+        Some(ac) => ac.space.to_owned(),
+        None => "".to_owned()
+    };
+    let airtable = if airtable_key.len() > 0 && airtable_space.len() > 0 {
+        Some(AirtableClient::new(&airtable_key, &airtable_space))
+    } else {
+        None
     };
     let binance = BinanceClient::new(&key[..], &secret[..]);
     let cmc = CMCClient::new(cmc_key);
-    let airtable = AirtableClient::new(&airtable_key[..], "appxfTKWlfCfBPSLd");
     if let Some(_matches) = matches.subcommand_matches("list") {
         let balances = binance.list();
         let prices = cmc.latest_listings(100);
         print_balances(Box::leak(balances), prices);
-    } else if let Some(_matches) = matches.subcommand_matches("prices") {
+    } else if let Some(_matches) = matches.subcommand_matches("cmc") {
         let prices = cmc.latest_listings(100);
-        prices.data.iter().for_each(
-            |item| println!("{}: ${}", item.symbol, match item.quote.get("USD") { Some(p) => p.price, None => 0.0 })
-        )
+        print_cmc_listings(&prices);
+    } else if let Some(_matches) = matches.subcommand_matches("config") {
+        println!("{}", toml::to_string_pretty(&config).unwrap());
+    } else if let Some(_matches) = matches.subcommand_matches("prices") {
+        let prices = binance.all_prices();
+        print_prices(Box::leak(prices));
     } else if let Some(_matches) = matches.subcommand_matches("balance") {
-        let base_currency = _matches.value_of("base").unwrap_or("BTC");
+        let base_currency = _matches.value_of("base").unwrap_or("BTC").to_ascii_uppercase();
         let index_size = _matches.value_of("size").unwrap_or("10");
         let index_size_i: u64 = index_size.parse().unwrap();
         let lookback = _matches.value_of("lookback").unwrap_or("20");
         let lookback_i: u64 = lookback.parse().unwrap();
         let factor = _matches.value_of("factor").unwrap_or("0.3");
         let factor_i: f64 = factor.parse().unwrap();
+        // Find all pairs that trade with the base pair
+        let binance_prices = binance.all_prices();
+        let mut tradable_symbols = binance_prices
+            .iter()
+            .filter(
+                |item| item.symbol.ends_with(&base_currency)
+            ).map(
+                |item| item.symbol[0..item.symbol.len()-base_currency.len()].to_owned()
+            ).collect::<Vec<String>>();
+        let base_currency_copy = base_currency[..].to_owned();
+        if !tradable_symbols.contains(&base_currency_copy) {
+            tradable_symbols.push(base_currency_copy);
+        }
+        println!("Acceptable trading symbols: {}", tradable_symbols.join(", ").blue());
         // First exit the market to the base currency.
         let order_ids = binance.exit_market(base_currency.to_owned());
         let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
         println!("Successfully exited old positions with order_ids: [{}]", order_ids_str.join(", ").blue());
-        let prices = cmc.latest_listings(100);
-        let balanced_portfolio = balance_by_market_cap(&cmc, &prices.data, index_size_i, lookback_i, factor_i);
+        let cmc_prices = cmc.latest_listings(100);
+        let balanced_portfolio = balance_by_market_cap(&cmc, &cmc_prices.data, index_size_i, lookback_i, factor_i, tradable_symbols);
         print_portfolio(&balanced_portfolio);
         // Calculating total value
         let base_worth = binance.position(base_currency.to_owned());
-        let base_price = prices.data.iter().find(|&p| p.symbol.to_uppercase() == base_currency.to_uppercase()).unwrap();
+        let base_price = cmc_prices.data.iter().find(|&p| p.symbol.to_uppercase() == base_currency.to_uppercase()).unwrap();
         let usd_worth = base_price.quote.get("USD").unwrap().price * base_worth;
         let order_ids = binance.enter_market(base_currency.to_owned(), &balanced_portfolio);
         let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
-        save_portfolio(&airtable, balanced_portfolio, usd_worth, base_worth);
+        if let Some(a_t) = airtable {
+            save_portfolio(&a_t, balanced_portfolio, usd_worth, base_worth);
+        }
         println!("Successfully entered new positions with order_ids: [{}]", order_ids_str.join(", ").blue());
     } else if let Some(_matches) = matches.subcommand_matches("exit") {
         let base_currency = _matches.value_of("base").unwrap_or("BTC");
@@ -124,9 +198,11 @@ fn balance_by_market_cap(
     prices: &Vec<CMCListing>,
     index_size: u64,
     lookback: u64,
-    smoothing_factor: f64) -> HashMap<String, f64> {
+    smoothing_factor: f64,
+    tradable_assets: Vec<String>
+) -> HashMap<String, f64> {
     let mut market_caps = HashMap::new();
-    let known_assets: Vec<& str> = vec!["ada","ae","aion","ant","bat","bnb","btc","btg","btm","cennz","ctxc","cvc","dai","dash","dcr","dgb","doge","drgn","elf","eng","eos","etc","eth","ethos","fun","gas","gno","gnt","gusd","icn","icx","kcs","knc","loom","lrc","lsk","ltc","maid","mana","mtl","nas","neo","omg","pax","pay","pivx","poly","powr","ppt","qash","rep","rhoc","salt","snt","srn","ven","veri","vtc","waves","wtc","xem","xlm","xmr","xrp","xvg","zec","zil","zrx"];
+    // let known_assets: Vec<& str> = vec!["ada","ae","aion","ant","bat","bnb","btc","btg","btm","cennz","ctxc","cvc","dai","dash","dcr","dgb","doge","drgn","elf","eng","eos","etc","eth","ethos","fun","gas","gno","gnt","gusd","icn","icx","kcs","knc","loom","lrc","lsk","ltc","maid","mana","mtl","nas","neo","omg","pax","pay","pivx","poly","powr","ppt","qash","rep","rhoc","salt","snt","srn","ven","veri","vtc","waves","wtc","xem","xlm","xmr","xrp","xvg","zec","zil","zrx"];
     let mut seen_assets = 0;
     let mut table = Table::new();
     table.add_row(row!["Symbol", "Count", "Historical Market Caps"]);
@@ -134,8 +210,8 @@ fn balance_by_market_cap(
         if seen_assets >= index_size {
             break;
         }
-        let l_symbol = &price.symbol.to_lowercase()[..];
-        if !known_assets.contains(&l_symbol) {
+        let l_symbol = price.symbol.to_uppercase()[..].to_owned();
+        if !tradable_assets.contains(&l_symbol) {
             continue;
         }
         let historical_quotes = cmc.historic_quotes(&price.symbol, lookback, "daily");
@@ -162,11 +238,29 @@ fn balance_by_market_cap(
     allotments
 }
 
+fn print_prices(prices: &mut Vec<Price>) {
+    let mut table = Table::new();
+    table.add_row(row!["Symbol", "Price"]);
+    for price in prices.iter() {
+        table.add_row(row![price.symbol, format!("{:.5}", price.price)]);
+    }
+    table.printstd();
+}
+
 fn print_portfolio(allotments: &HashMap<String, f64>) {
     let mut table = Table::new();
     table.add_row(row!["Symbol", "Percentage"]);
     for (symbol, percentage) in allotments {
         table.add_row(row![symbol, format!("{:.2}", percentage * 100.0)]);
+    }
+    table.printstd();
+}
+
+fn print_cmc_listings(listings: &CMCListingResponse) {
+    let mut table = Table::new();
+    table.add_row(row!["Symbol", "Price"]);
+    for price in listings.data.iter() {
+        table.add_row(row![price.symbol, format!("${:.5}", match price.quote.get("USD") { Some(p) => p.price, None => 0.0 })]);
     }
     table.printstd();
 }
@@ -183,12 +277,20 @@ fn matches() -> clap::ArgMatches<'static> {
             (version: "1.0")
             (@arg verbose: -v --verbose "Print test information verbosely")
         )
-        (@subcommand prices =>
-            (about: "list recent prices")
+        (@subcommand cmc =>
+            (about: "list recent prices from cmc in USD")
             (version: "1.0")
         )
         (@subcommand save =>
             (about: "test save portfolio")
+            (version: "1.0")
+        )
+        (@subcommand prices =>
+            (about: "print exchange prices")
+            (version: "1.0")
+        )
+        (@subcommand config =>
+            (about: "print config information")
             (version: "1.0")
         )
         (@subcommand balance =>
@@ -226,21 +328,21 @@ fn print_balances(balances: &mut Vec<Balance>, prices: CMCListingResponse) {
     table.add_row(row!["Symbol", "Shares", "Value (USD)", "% change (7d)", "% change (24 h)"]);
     balances.iter().for_each(
         |item| {
-            let increase_7d = match price_map.get(&item.asset) {
+            let increase_7d = match price_map.get(&item.symbol) {
                 Some(price) => match price.quote.get("USD") {
                     Some(quote) => if quote.percent_change_7d > 0.0 { quote.percent_change_7d.to_string().green() } else { quote.percent_change_7d.to_string().red() } ,
                     None => "0".to_string().white()
                 },
                 None => "0".to_string().white()
             };
-            let increase_24h = match price_map.get(&item.asset) {
+            let increase_24h = match price_map.get(&item.symbol) {
                 Some(price) => match price.quote.get("USD") {
                     Some(quote) => if quote.percent_change_24h > 0.0 { quote.percent_change_24h.to_string().green() } else { quote.percent_change_24h.to_string().red() } ,
                     None => "0".to_string().white()
                 },
                 None => "0".to_string().white()
             };
-            let total_value = match price_map.get(&item.asset) {
+            let total_value = match price_map.get(&item.symbol) {
                 Some(price) => match price.quote.get("USD") {
                     Some(quote) => quote.price * item.total(),
                     None => 0.0
@@ -249,7 +351,7 @@ fn print_balances(balances: &mut Vec<Balance>, prices: CMCListingResponse) {
             };
             if item.total() > 0.0 && total_value > 1.0 {
                 table.add_row(row![
-                    item.asset,
+                    item.symbol,
                     item.total().to_string().yellow(),
                     total_value.to_string().blue(),
                     increase_7d,

@@ -1,10 +1,11 @@
 use std::collections::{HashMap};
 use binance::api::*;
 use binance::account::*;
-use binance::market::*;
+use binance::market::{Market};
+use binance::model::{Prices};
 use error_chain::ChainedError;
 
-use crate::clients::client::{ExchangeOps,Balance};
+use crate::clients::client::{ExchangeOps,Balance,Price};
 
 pub struct BinanceClient<'a> {
   pub key: &'a str,
@@ -22,7 +23,7 @@ impl<'a> ExchangeOps for BinanceClient<'a> {
     };
     let coerced = balances
       .iter()
-      .map(|bal| Balance { free: bal.free.parse().unwrap(), asset: bal.asset.to_owned(), locked: bal.locked.parse().unwrap() })
+      .map(|bal| Balance { free: bal.free.parse().unwrap(), symbol: bal.asset.to_owned(), locked: bal.locked.parse().unwrap() })
       .collect::<Vec<Balance>>();
     Box::new(coerced)
   }
@@ -36,6 +37,23 @@ impl<'a> ExchangeOps for BinanceClient<'a> {
       Err(e) => panic!("Could not get_balance for symbol: {}", symbol)
     };
     balance.parse().unwrap()
+  }
+
+  /**
+   * Return all prices for all tickers.
+   */
+  fn all_prices(&self) -> Box<Vec<Price>> {
+    let prices = match self.market.get_all_prices() {
+        Ok(answer) => match answer {
+          Prices::AllPrices(ps) => ps
+        },
+        Err(e) => panic!("Error getting all prices: {}", e),
+    };
+    let coerced = prices
+      .iter()
+      .map(|item| Price { symbol: item.symbol.to_owned(), price: item.price })
+      .collect::<Vec<Price>>();
+    Box::new(coerced)
   }
 
   /**
@@ -65,8 +83,8 @@ impl<'a> ExchangeOps for BinanceClient<'a> {
         None => 0
       };
       let base_ten: f64 = 10.0;
-      let rouding_multiplier = base_ten.powi(rounding);
-      let quantity_to_buy_threes = (quantity_to_buy * rouding_multiplier).floor() / rouding_multiplier;
+      let rounding_multiplier = base_ten.powi(rounding);
+      let quantity_to_buy_threes = (quantity_to_buy * rounding_multiplier).floor() / rounding_multiplier;
       let order_id = match self.account.market_buy(ticker_ptr, quantity_to_buy_threes) {
         Ok(answer) => answer.order_id,
         Err(e) => {
@@ -90,8 +108,8 @@ impl<'a> ExchangeOps for BinanceClient<'a> {
       None => 0
     };
     let base_ten: f64 = 10.0;
-    let rouding_multiplier = base_ten.powi(rounding);
-    let quantity_to_sell_threes = (quantity_to_sell * rouding_multiplier).floor() / rouding_multiplier;
+    let rounding_multiplier = base_ten.powi(rounding);
+    let quantity_to_sell_threes = (quantity_to_sell * rounding_multiplier).floor() / rounding_multiplier;
     let order_id = match self.account.market_sell(ticker_ptr, quantity_to_sell_threes) {
       Ok(answer) => answer.order_id,
       Err(e) => panic!("Error making market_sell for symbol: {}\n:{}", ticker_ptr, e)
@@ -117,6 +135,7 @@ impl<'a> ExchangeOps for BinanceClient<'a> {
    * Exit all holdings into some base currency.
    */
   fn exit_market(&self, exit_into: String) -> Vec<u64> {
+    let prices = self.all_prices();
     let balances = match self.account.get_account() {
       Ok(answer) => answer.balances,
       Err(e) => panic!("Could not get_account: {}", e),
@@ -126,7 +145,12 @@ impl<'a> ExchangeOps for BinanceClient<'a> {
     for balance in balances {
       let asset_ptr = &balance.asset[..];
       let total_free = balance.free.parse().unwrap();
-      if asset_ptr != exit_into_ptr && total_free > 0.0 {
+      let price_for_asset = match (*prices).iter().find(|p| p.symbol == format!("{}{}", asset_ptr.to_uppercase(), exit_into.to_uppercase())) {
+        Some(p) => p.price,
+        None => 0.0
+      };
+      let total_value_in_base = total_free * price_for_asset;
+      if asset_ptr != exit_into_ptr && total_value_in_base > 0.001 {
         let sell_order_id = self.market_sell(balance.asset, exit_into_ptr.to_owned(), total_free);
         order_ids.push(sell_order_id)
       }
