@@ -24,6 +24,7 @@ impl<'a> AirtableClient<'a> {
     println!("Saving to url {}", url);
     let mut data = HashMap::new();
     data.insert("fields", record);
+    // TODO: Handle error gracefully.
     let response = match self.client.post(&url)
       .header("Content-Type", "application/json")
       .header("Authorization", format!("Bearer {}", self.api_key))

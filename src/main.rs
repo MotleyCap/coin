@@ -102,10 +102,6 @@ fn main() {
         let position_to_enter = _matches.value_of("position").unwrap();
         let order_id = binance.market_buy(position_to_enter.to_owned(), base_currency.to_owned(), amount);
         println!("Successfully entered position with order_id: {}", order_id.to_string().green());
-    } else if let Some(_matches) = matches.subcommand_matches("save") {
-        let mut portfolio = HashMap::new();
-        portfolio.insert("BTC".to_owned(), 1.0);
-        save_portfolio(&airtable, portfolio, 4000.0, 1.0);
     } else {
         println!("Unknown command");
     }
