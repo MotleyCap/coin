@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path};
 use std::env::{var,home_dir};
 use std::collections::{HashMap,HashSet};
+use std::{thread, time};
 
 use clap::clap_app;
 use chrono::prelude::*;
@@ -104,19 +105,8 @@ fn main() {
         let prices = cmc.latest_listings(100);
         print_balances(Box::leak(balances), prices);
     } else if let Some(_matches) = matches.subcommand_matches("symbols") {
-        let binance_prices = binance.all_prices();
         let base_currency = _matches.value_of("base").unwrap_or("BTC").to_ascii_uppercase();
-        let tradable_symbols: HashSet<_> = binance_prices
-            .iter()
-            .filter(
-                |item| item.symbol.ends_with(&base_currency) || item.symbol.starts_with(&base_currency)
-            ).map(
-                |item| match item.symbol.ends_with(&base_currency) {
-                    true => item.symbol[0..item.symbol.len()-base_currency.len()].to_owned(),
-                    false => item.symbol[base_currency.len()..item.symbol.len()].to_owned()
-                }
-            ).collect();
-        let tradable_symbols: HashSet<String> = tradable_symbols.difference(&blacklisted_symbols).map(|s| s.to_string()).collect();
+        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, &binance, &cmc);
         println!("Tradable symbols: {:?}", tradable_symbols);
     } else if let Some(_matches) = matches.subcommand_matches("cmc") {
         let prices = cmc.latest_listings(100);
@@ -134,39 +124,30 @@ fn main() {
         let lookback_i: u64 = lookback.parse().unwrap();
         let factor = _matches.value_of("factor").unwrap_or("0.3");
         let factor_i: f64 = factor.parse().unwrap();
-        // Find all pairs that trade with the base pair
-        let binance_prices = binance.all_prices();
-        let mut tradable_symbols: HashSet<_> = binance_prices
-            .iter()
-            .filter(
-                |item| item.symbol.ends_with(&base_currency)
-            ).map(
-                |item| item.symbol[0..item.symbol.len()-base_currency.len()].to_owned()
-            ).collect();
-
-        let base_currency_copy = base_currency[..].to_owned();
-        if !tradable_symbols.contains(&base_currency_copy) {
-            tradable_symbols.insert(base_currency_copy);
-        }
-        let tradable_symbols: HashSet<String> = tradable_symbols.difference(&blacklisted_symbols).map(|s| s.to_string()).collect();
-        println!("Acceptable trading symbols: {:?}", tradable_symbols);
+        let is_mock = _matches.is_present("mock");
+        // Find all pairs that trade with the base pai
+        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, &binance, &cmc);
         // First exit the market to the base currency.
-        let order_ids = binance.exit_market(base_currency.to_owned());
-        let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
-        println!("Successfully exited old positions with order_ids: [{}]", order_ids_str.join(", ").blue());
+        if !is_mock {
+            let order_ids = binance.exit_market(base_currency.to_owned());
+            let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
+            println!("Successfully exited old positions with order_ids: [{}]", order_ids_str.join(", ").blue());
+        }
         let cmc_prices = cmc.latest_listings(100);
         let balanced_portfolio = balance_by_market_cap(&cmc, &cmc_prices.data, index_size_i, lookback_i, factor_i, tradable_symbols);
         print_portfolio(&balanced_portfolio);
         // Calculating total value
-        let base_worth = binance.position(base_currency.to_owned());
-        let base_price = cmc_prices.data.iter().find(|&p| p.symbol.to_uppercase() == base_currency.to_uppercase()).unwrap();
-        let usd_worth = base_price.quote.get("USD").unwrap().price * base_worth;
-        let order_ids = binance.enter_market(base_currency.to_owned(), &balanced_portfolio);
-        let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
-        if let Some(a_t) = airtable {
-            save_portfolio(&a_t, balanced_portfolio, usd_worth, base_worth);
+        if !is_mock {
+            let base_worth = binance.position(base_currency.to_owned());
+            let base_price = cmc_prices.data.iter().find(|&p| p.symbol.to_uppercase() == base_currency.to_uppercase()).unwrap();
+            let usd_worth = base_price.quote.get("USD").unwrap().price * base_worth;
+            let order_ids = binance.enter_market(base_currency.to_owned(), &balanced_portfolio);
+            let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
+            if let Some(a_t) = airtable {
+                save_portfolio(&a_t, balanced_portfolio, usd_worth, base_worth);
+            }
+            println!("Successfully entered new positions with order_ids: [{}]", order_ids_str.join(", ").blue());
         }
-        println!("Successfully entered new positions with order_ids: [{}]", order_ids_str.join(", ").blue());
     } else if let Some(_matches) = matches.subcommand_matches("exit") {
         let base_currency = _matches.value_of("base").unwrap_or("BTC");
         if _matches.is_present("position") {
@@ -195,6 +176,28 @@ fn main() {
     } else {
         println!("Unknown command");
     }
+}
+
+fn get_tradeable_symbols(base_currency: &str, blacklist: &HashSet<String>, binance: &BinanceClient, cmc: &CMCClient) -> HashSet<String> {
+    let binance_prices = binance.all_prices();
+    let mut tradable_symbols: HashSet<_> = binance_prices
+        .iter()
+        .filter(
+            |item| item.symbol.ends_with(&base_currency) || item.symbol.starts_with(&base_currency)
+        ).map(
+            |item| match item.symbol.ends_with(&base_currency) {
+                true => item.symbol[0..item.symbol.len()-base_currency.len()].to_owned(),
+                false => item.symbol[base_currency.len()..item.symbol.len()].to_owned()
+            }
+        ).collect();
+    let coins_with_data = cmc.supported_assets();
+    println!("Fetched {} supported assets from api.coinmetrics.com", coins_with_data.len());
+    if !tradable_symbols.contains(base_currency) {
+        tradable_symbols.insert(base_currency.to_string());
+    }
+    let tradable_symbols: HashSet<String> = tradable_symbols.difference(blacklist).map(|s| s.to_string()).collect();
+    let tradable_symbols: HashSet<String> = tradable_symbols.intersection(&coins_with_data).map(|s| s.to_string()).collect();
+    tradable_symbols
 }
 
 fn save_portfolio(airtable: &AirtableClient, portfolio: HashMap<String, f64>, value_usd: f64, value_btc: f64) {
@@ -230,6 +233,9 @@ fn balance_by_market_cap(
             continue;
         }
         let historical_quotes = cmc.historic_quotes(&price.symbol, lookback, "daily");
+        // Slow rate to 5 reqs a second
+        // let throttle_length = time::Duration::from_millis(200);
+        // thread::sleep(throttle_length);
         let historical_market_caps = historical_quotes.result.iter().map(
             |h_quote| {
                 let price = h_quote.1;
@@ -320,6 +326,7 @@ fn matches() -> clap::ArgMatches<'static> {
             (@arg size: -s --size +takes_value "Specifies how many currencies should be included in the index. Defaults to 10.")
             (@arg lookback: -l --lookback +takes_value "Specifies how many periods to lookback when calculating the moving average. Defaults to 20.")
             (@arg factor: -f --factor +takes_value "Specifies the smoothing factor for the moving average calculation. Defaults to 0.3.")
+            (@arg mock: -m --mock "Preview the balance event but do not execute any trades.")
         )
         (@subcommand exit =>
             (about: "exit positions by selling into a single base currency")

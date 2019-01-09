@@ -1,5 +1,5 @@
 use reqwest::{get};
-use std::collections::HashMap;
+use std::collections::{HashMap,HashSet};
 use std::time::SystemTime;
 
 const CMC_BASE_URL: &str = "https://pro-api.coinmarketcap.com";
@@ -114,16 +114,37 @@ impl CMCClient {
       beginning_of_period,
       beginning_of_today
     );
+    println!("Fetching historic market prices for {}", symbol);
     let body: CMCHistoricalQuotesResponse = match get(url) {
       Ok(mut data) => match data.json() {
         Ok(o) => o,
         Err(e) => {
           println!("{}",e);
+          println!("{:?}", data);
           panic!(e);
         },
       },
       Err(e) => panic!(e),
     };
     body
+  }
+
+  pub fn supported_assets(&self) -> HashSet<String> {
+    let url: &str = &format!(
+      "{}/v1/get_supported_assets",
+      CM_BASE_URL
+    );
+    let body: HashSet<String> = match get(url) {
+      Ok(mut data) => match data.json() {
+        Ok(o) => o,
+        Err(e) => {
+          println!("{}",e);
+          println!("{:?}", data);
+          panic!(e);
+        },
+      },
+      Err(e) => panic!(e),
+    };
+    body.iter().map(|s| s.to_uppercase()).collect()
   }
 }
