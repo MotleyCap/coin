@@ -5,7 +5,7 @@ use binance::market::{Market};
 use binance::model::{Prices};
 use error_chain::ChainedError;
 
-use crate::clients::client::{ExchangeOps,Balance,Price};
+use crate::client::{ExchangeOps,Balance,Price};
 
 pub struct BinanceClient<'a> {
   pub key: &'a str,

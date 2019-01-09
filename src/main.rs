@@ -6,12 +6,16 @@ use std::collections::{HashMap,HashSet};
 use clap::clap_app;
 use chrono::prelude::*;
 
-mod clients;
 mod portfolio;
-use crate::clients::binance::{BinanceClient};
-use crate::clients::client::{ExchangeOps,Balance,Price};
-use crate::clients::cmc::{CMCClient, CMCListingResponse, CMCListing};
-use crate::clients::airtable::{AirtableClient};
+mod cmc;
+mod client;
+mod binance;
+mod airtable;
+
+use crate::binance::{BinanceClient};
+use crate::client::{ExchangeOps,Balance,Price};
+use crate::cmc::{CMCClient, CMCListingResponse, CMCListing};
+use crate::airtable::{AirtableClient};
 use crate::portfolio::{Portfolio};
 
 #[macro_use]
