@@ -32,6 +32,7 @@ impl<'a> AirtableClient<'a> {
         Ok(mut o) => println!("{:?}", o.text()),
         Err(e) => panic!(e)
       };
+    response
   }
 }
 
