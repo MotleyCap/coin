@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path};
 use std::env::{var,home_dir};
-use std::collections::HashMap;
+use std::collections::{HashMap,HashSet};
 
 use clap::clap_app;
 use chrono::prelude::*;
@@ -85,6 +85,13 @@ fn main() {
     let key = config.binance.key.to_owned();
     let secret = config.binance.secret.to_owned();
     let cmc_key = config.cmc.key.to_owned();
+    let blacklisted_symbols: HashSet<_> = match &config.blacklist {
+        Some(l) => {
+            let as_set: HashSet<String> = l.iter().map(|s| s.to_string()).collect();
+            as_set
+        },
+        None => HashSet::new()
+    };
     let airtable_key = match &config.airtable {
         Some(ak) => ak.key.to_owned(),
         None => "".to_owned()
@@ -100,10 +107,25 @@ fn main() {
     };
     let binance = BinanceClient::new(&key[..], &secret[..]);
     let cmc = CMCClient::new(cmc_key);
-    if let Some(_matches) = matches.subcommand_matches("list") {
+    if let Some(_matches) = matches.subcommand_matches("balances") {
         let balances = binance.list();
         let prices = cmc.latest_listings(100);
         print_balances(Box::leak(balances), prices);
+    } else if let Some(_matches) = matches.subcommand_matches("symbols") {
+        let binance_prices = binance.all_prices();
+        let base_currency = _matches.value_of("base").unwrap_or("BTC").to_ascii_uppercase();
+        let tradable_symbols: HashSet<_> = binance_prices
+            .iter()
+            .filter(
+                |item| item.symbol.ends_with(&base_currency) || item.symbol.starts_with(&base_currency)
+            ).map(
+                |item| match item.symbol.ends_with(&base_currency) {
+                    true => item.symbol[0..item.symbol.len()-base_currency.len()].to_owned(),
+                    false => item.symbol[base_currency.len()..item.symbol.len()].to_owned()
+                }
+            ).collect();
+        let tradable_symbols: HashSet<String> = tradable_symbols.difference(&blacklisted_symbols).map(|s| s.to_string()).collect();
+        println!("Tradable symbols: {:?}", tradable_symbols);
     } else if let Some(_matches) = matches.subcommand_matches("cmc") {
         let prices = cmc.latest_listings(100);
         print_cmc_listings(&prices);
@@ -122,18 +144,20 @@ fn main() {
         let factor_i: f64 = factor.parse().unwrap();
         // Find all pairs that trade with the base pair
         let binance_prices = binance.all_prices();
-        let mut tradable_symbols = binance_prices
+        let mut tradable_symbols: HashSet<_> = binance_prices
             .iter()
             .filter(
                 |item| item.symbol.ends_with(&base_currency)
             ).map(
                 |item| item.symbol[0..item.symbol.len()-base_currency.len()].to_owned()
-            ).collect::<Vec<String>>();
+            ).collect();
+
         let base_currency_copy = base_currency[..].to_owned();
         if !tradable_symbols.contains(&base_currency_copy) {
-            tradable_symbols.push(base_currency_copy);
+            tradable_symbols.insert(base_currency_copy);
         }
-        println!("Acceptable trading symbols: {}", tradable_symbols.join(", ").blue());
+        let tradable_symbols: HashSet<String> = tradable_symbols.difference(&blacklisted_symbols).map(|s| s.to_string()).collect();
+        println!("Acceptable trading symbols: {:?}", tradable_symbols);
         // First exit the market to the base currency.
         let order_ids = binance.exit_market(base_currency.to_owned());
         let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
@@ -199,10 +223,9 @@ fn balance_by_market_cap(
     index_size: u64,
     lookback: u64,
     smoothing_factor: f64,
-    tradable_assets: Vec<String>
+    tradable_assets: HashSet<String>
 ) -> HashMap<String, f64> {
     let mut market_caps = HashMap::new();
-    // let known_assets: Vec<& str> = vec!["ada","ae","aion","ant","bat","bnb","btc","btg","btm","cennz","ctxc","cvc","dai","dash","dcr","dgb","doge","drgn","elf","eng","eos","etc","eth","ethos","fun","gas","gno","gnt","gusd","icn","icx","kcs","knc","loom","lrc","lsk","ltc","maid","mana","mtl","nas","neo","omg","pax","pay","pivx","poly","powr","ppt","qash","rep","rhoc","salt","snt","srn","ven","veri","vtc","waves","wtc","xem","xlm","xmr","xrp","xvg","zec","zil","zrx"];
     let mut seen_assets = 0;
     let mut table = Table::new();
     table.add_row(row!["Symbol", "Count", "Historical Market Caps"]);
@@ -284,6 +307,11 @@ fn matches() -> clap::ArgMatches<'static> {
         (@subcommand save =>
             (about: "test save portfolio")
             (version: "1.0")
+        )
+        (@subcommand symbols =>
+            (about: "List the symbols that can trade with a given currency")
+            (version: "1.0")
+            (@arg base: -b --base +takes_value "The base currency for the given trading symbols")
         )
         (@subcommand prices =>
             (about: "print exchange prices")
