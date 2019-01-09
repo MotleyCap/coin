@@ -105,20 +105,30 @@ fn main() {
     };
     let binance = BinanceClient::new(&key[..], &secret[..]);
     let cmc = CMCClient::new(cmc_key);
-    if let Some(_matches) = matches.subcommand_matches("portfolio") {
+    if let Some(_matches) = matches.subcommand_matches("account") {
         let balances = binance.list();
         let prices = cmc.latest_listings(100);
-        print_balances(Box::leak(balances), prices);
+        let account = make_account(&balances, prices);
+        print_account(&account);
+    } if let Some(_matches) = matches.subcommand_matches("save") {
+        let balances = binance.list();
+        let prices = cmc.latest_listings(100);
+        let account = make_account(&balances, prices);
+        if let Some(a_t) = airtable {
+            save_account(&a_t, &account);
+        } else {
+            println!("Could not find airtable credentials in ~/.coin.yaml");
+        }
     } else if let Some(_matches) = matches.subcommand_matches("symbols") {
         let base_currency = _matches.value_of("base").unwrap_or("BTC").to_ascii_uppercase();
         let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, &binance, &cmc);
         println!("Tradable symbols: {:?}", tradable_symbols);
-    } else if let Some(_matches) = matches.subcommand_matches("prices") {
+    } else if let Some(_matches) = matches.subcommand_matches("cmc") {
         let prices = cmc.latest_listings(100);
         print_cmc_listings(&prices);
     } else if let Some(_matches) = matches.subcommand_matches("config") {
         println!("{:?}", coin_file);
-    } else if let Some(_matches) = matches.subcommand_matches("prices") {
+    } else if let Some(_matches) = matches.subcommand_matches("binance") {
         let prices = binance.all_prices();
         print_prices(Box::leak(prices));
     } else if let Some(_matches) = matches.subcommand_matches("balance") {
@@ -149,7 +159,9 @@ fn main() {
             let order_ids = binance.enter_market(base_currency.to_owned(), &balanced_portfolio);
             let order_ids_str = order_ids.iter().map(|o| o.to_string()).collect::<Vec<String>>();
             if let Some(a_t) = airtable {
-                save_portfolio(&a_t, balanced_portfolio, usd_worth, base_worth);
+                let balances = binance.list();
+                let account = make_account(&balances, cmc_prices);
+                save_account(&a_t, &account);
             }
             println!("Successfully entered new positions with order_ids: [{}]", order_ids_str.join(", ").blue());
         }
@@ -205,13 +217,13 @@ fn get_tradeable_symbols(base_currency: &str, blacklist: &HashSet<String>, binan
     tradable_symbols
 }
 
-fn save_portfolio(airtable: &AirtableClient, portfolio: HashMap<String, f64>, value_usd: f64, value_btc: f64) {
+fn save_account(airtable: &AirtableClient, account: &Account) {
     let now = Utc::now();
-    let position_str = serde_json::to_string(&portfolio).unwrap();
+    let position_str = serde_json::to_string_pretty(&account.balances).unwrap();
     let value = serde_json::json!({
         "Timestamp": now.to_string(),
-        "Value (USD)": value_usd,
-        "Value (BTC)": value_btc,
+        "Value (USD)": account.total_usd,
+        "Value (BTC)": account.total_btc,
         "Positions": position_str
     });
     airtable.create_record("Portfolio History".to_owned(), &value);
@@ -316,7 +328,7 @@ fn matches() -> clap::ArgMatches<'static> {
             (version: "1.0")
             (@arg base: -b --base +takes_value "The base currency for the given trading symbols")
         )
-        (@subcommand prices =>
+        (@subcommand binance =>
             (about: "print exchange prices")
             (version: "1.0")
         )
@@ -349,15 +361,39 @@ fn matches() -> clap::ArgMatches<'static> {
     ).get_matches();
     matches
 }
-
-fn print_balances(balances: &mut Vec<Balance>, prices: CMCListingResponse) {
+#[derive(Deserialize, Serialize, Debug)]
+struct Account {
+    balances: Vec<AccountBalance>,
+    total_usd: f64,
+    total_btc: f64,
+}
+impl Account {
+    fn usd(&self) -> f64 {
+        (self.total_usd * USD_FORMAT_MULTIPLIER).round()/USD_FORMAT_MULTIPLIER
+    }
+    fn btc(&self) -> f64 {
+        (self.total_btc * BTC_FORMAT_MULTIPLIER).round()/BTC_FORMAT_MULTIPLIER
+    }
+}
+#[derive(Deserialize, Serialize, Debug)]
+struct AccountBalance {
+    symbol: String,
+    quantity: f64,
+    value_usd: f64,
+    value_btc: f64,
+    change_7d: f64,
+    change_24h: f64
+}
+impl AccountBalance {
+    fn usd(&self) -> f64 {
+        (self.value_usd * USD_FORMAT_MULTIPLIER).round()/USD_FORMAT_MULTIPLIER
+    }
+    fn btc(&self) -> f64 {
+        (self.value_btc * BTC_FORMAT_MULTIPLIER).round()/BTC_FORMAT_MULTIPLIER
+    }
+}
+fn make_account(balances: &Vec<Balance>, prices: CMCListingResponse) -> Account {
     let price_map = cmc_listings_as_map(prices);
-    balances.sort_unstable_by(
-        |a, b| if a.total() > b.total() { std::cmp::Ordering::Less }
-        else if a.total() == b.total() { std::cmp::Ordering::Equal }
-        else { std::cmp::Ordering::Greater });
-    let mut table = Table::new();
-    table.add_row(row!["Symbol", "Count", "Value (USD)", "Value (BTC)", "% change (7d)", "% change (24 h)"]);
     let price_btc = match price_map.get("BTC") {
         Some(price) => match price.quote.get("USD") {
             Some(quote) => quote.price,
@@ -367,23 +403,24 @@ fn print_balances(balances: &mut Vec<Balance>, prices: CMCListingResponse) {
     };
     let mut total_usd = 0.0;
     let mut total_btc = 0.0;
+    let mut acct_balances: Vec<AccountBalance> = Vec::new();
     balances.iter().for_each(
         |item| {
             let increase_7d = match price_map.get(&item.symbol) {
                 Some(price) => match price.quote.get("USD") {
-                    Some(quote) => if quote.percent_change_7d > 0.0 { quote.percent_change_7d.to_string().green() } else { quote.percent_change_7d.to_string().red() } ,
-                    None => "0".to_string().white()
+                    Some(quote) => quote.percent_change_7d,
+                    None => 0.0
                 },
-                None => "0".to_string().white()
+                None => 0.0
             };
             let increase_24h = match price_map.get(&item.symbol) {
                 Some(price) => match price.quote.get("USD") {
-                    Some(quote) => if quote.percent_change_24h > 0.0 { quote.percent_change_24h.to_string().green() } else { quote.percent_change_24h.to_string().red() } ,
-                    None => "0".to_string().white()
+                    Some(quote) => quote.percent_change_24h,
+                    None => 0.0
                 },
-                None => "0".to_string().white()
+                None => 0.0
             };
-            let mut total_value = match price_map.get(&item.symbol) {
+            let total_value = match price_map.get(&item.symbol) {
                 Some(price) => match price.quote.get("USD") {
                     Some(quote) => quote.price * item.total(),
                     None => 0.0
@@ -391,7 +428,7 @@ fn print_balances(balances: &mut Vec<Balance>, prices: CMCListingResponse) {
                 None => 0.0
             };
             total_usd = total_usd + total_value;
-            let mut total_value_btc = match price_map.get(&item.symbol) {
+            let total_value_btc = match price_map.get(&item.symbol) {
                 Some(price) => match price.quote.get("USD") {
                     Some(quote) => quote.price * item.total() / price_btc,
                     None => 0.0
@@ -400,22 +437,60 @@ fn print_balances(balances: &mut Vec<Balance>, prices: CMCListingResponse) {
             };
             total_btc = total_btc + total_value_btc;
             if item.total() > 0.0 && total_value > 1.0 {
-                total_value = (total_value * USD_FORMAT_MULTIPLIER).round()/USD_FORMAT_MULTIPLIER;
-                total_value_btc = (total_value_btc * BTC_FORMAT_MULTIPLIER).round()/BTC_FORMAT_MULTIPLIER;
+                // total_value = (total_value * USD_FORMAT_MULTIPLIER).round()/USD_FORMAT_MULTIPLIER;
+                // total_value_btc = (total_value_btc * BTC_FORMAT_MULTIPLIER).round()/BTC_FORMAT_MULTIPLIER;
+                acct_balances.push(
+                    AccountBalance {
+                        symbol: item.symbol.to_string(),
+                        quantity: item.total(),
+                        value_usd: total_value,
+                        value_btc: total_value_btc,
+                        change_7d: increase_7d,
+                        change_24h: increase_24h
+                    }
+                );
+            }
+        }
+    );
+    acct_balances.sort_unstable_by(
+        |a, b| if a.value_usd > b.value_usd { std::cmp::Ordering::Less }
+        else if a.value_usd == b.value_usd { std::cmp::Ordering::Equal }
+        else { std::cmp::Ordering::Greater });
+    Account {
+        balances: acct_balances,
+        total_btc: total_btc,
+        total_usd: total_usd
+    }
+}
+
+fn print_account(account: &Account) {
+    let mut table = Table::new();
+    table.add_row(row!("Symbol", "Quantity", "Value (USD)", "Value (BTC)", "Change (7d)", "Change (14d)"));
+    account.balances.iter().for_each(
+        |item| {
+            let increase_7d = if item.change_7d > 0.0 {
+                item.change_7d.to_string().green()
+            } else {
+                item.change_7d.to_string().red()
+            };
+            let increase_24h = if item.change_24h > 0.0 {
+                item.change_24h.to_string().green()
+            } else {
+                item.change_24h.to_string().red()
+            };
+            if item.value_btc > 0.0 && item.value_usd > 1.0 {
                 table.add_row(row![
                     item.symbol,
-                    item.total().to_string().yellow(),
-                    format!("${}", total_value).blue(),
-                    format!("{}", total_value_btc).cyan(),
+                    item.quantity.to_string().yellow(),
+                    item.usd().to_string().blue(),
+                    item.btc().to_string().cyan(),
                     increase_7d,
                     increase_24h
                 ]);
             }
         }
     );
-    total_usd = (total_usd * USD_FORMAT_MULTIPLIER).round()/USD_FORMAT_MULTIPLIER;
-    total_btc = (total_btc * BTC_FORMAT_MULTIPLIER).round()/BTC_FORMAT_MULTIPLIER;
-    table.add_row(row!["","",total_usd, total_btc,"",""]);
+    table.add_row(row!["","",account.usd(), account.btc(),"",""]);
     table.printstd();
 }
 
