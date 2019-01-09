@@ -127,7 +127,7 @@ fn main() {
         let prices = cmc.latest_listings(100);
         print_cmc_listings(&prices);
     } else if let Some(_matches) = matches.subcommand_matches("config") {
-        println!("{:?}", coin_file);
+        println!("{}", coin_file.unwrap_or("Could not find ~/.coin.env".to_owned()));
     } else if let Some(_matches) = matches.subcommand_matches("binance") {
         let prices = binance.all_prices();
         print_prices(Box::leak(prices));
@@ -310,7 +310,7 @@ fn matches() -> clap::ArgMatches<'static> {
         (about: "A CLI for interacting with Cryptocurrency Exchanges")
         (@arg CONFIG: -c --config +takes_value "Sets a custom config file")
         (@arg debug: -d ... "Sets the level of debugging information")
-        (@subcommand portfolio =>
+        (@subcommand account =>
             (about: "show portfolio details")
             (version: "1.0")
             (@arg verbose: -v --verbose "Print test information verbosely")
