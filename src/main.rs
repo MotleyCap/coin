@@ -23,12 +23,7 @@ extern crate toml;
 use colored::*;
 use prettytable::{Table, row, cell};
 
-const BINANCE_KEY_NAME: &str = "BINANCE_KEY";
-const BINANCE_SECRET_NAME: &str = "BINANCE_SECRET";
-const CMC_KEY_NAME: &str = "CMC_KEY";
-const AIRTABLE_KEY_NAME: &str = "AIRTABLE_KEY";
-
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 struct Config {
     pub blacklist: Option<Vec<String>>,
     pub binance: BinanceConfig,
@@ -36,18 +31,18 @@ struct Config {
     pub airtable: Option<AirtableConfig>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 struct BinanceConfig {
     pub key: String,
     pub secret: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 struct CMCConfig {
     pub key: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 struct AirtableConfig {
     pub key: String,
     pub space: String,
@@ -66,7 +61,7 @@ fn main() {
     } else {
         None
     };
-    let raw_config: Option<Config> = match coin_file {
+    let raw_config: Option<Config> = match &coin_file {
         Some(contents) => {
             let conf: Config = match toml::from_str(&contents) {
                 Ok(conts) => conts,
@@ -92,16 +87,9 @@ fn main() {
         },
         None => HashSet::new()
     };
-    let airtable_key = match &config.airtable {
-        Some(ak) => ak.key.to_owned(),
-        None => "".to_owned()
-    };
-    let airtable_space = match &config.airtable {
-        Some(ac) => ac.space.to_owned(),
-        None => "".to_owned()
-    };
-    let airtable = if airtable_key.len() > 0 && airtable_space.len() > 0 {
-        Some(AirtableClient::new(&airtable_key, &airtable_space))
+    let airtable_config = config.airtable.unwrap_or(AirtableConfig { key: "".to_string(), space: "".to_string()});
+    let airtable = if (&airtable_config.key).len() > 0 && (&airtable_config.space).len() > 0 {
+        Some(AirtableClient::new(&airtable_config.key, &airtable_config.space))
     } else {
         None
     };
@@ -130,7 +118,7 @@ fn main() {
         let prices = cmc.latest_listings(100);
         print_cmc_listings(&prices);
     } else if let Some(_matches) = matches.subcommand_matches("config") {
-        println!("{}", toml::to_string_pretty(&config).unwrap());
+        println!("{:?}", coin_file);
     } else if let Some(_matches) = matches.subcommand_matches("prices") {
         let prices = binance.all_prices();
         print_prices(Box::leak(prices));
