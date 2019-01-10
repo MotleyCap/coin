@@ -16,7 +16,7 @@ mod airtable;
 use crate::binance::{BinanceClient};
 use crate::client::{ExchangeOps,Balance,Price};
 use crate::cmc::{CMCClient, CMCListingResponse, CMCListing};
-use crate::airtable::{AirtableClient};
+use crate::airtable::{AirtableClient,AirtableConfig,ColumnMap};
 use crate::portfolio::{Portfolio};
 
 #[macro_use]
@@ -51,13 +51,6 @@ struct BinanceConfig {
 struct CMCConfig {
     pub key: String,
 }
-
-#[derive(Deserialize, Serialize, Debug)]
-struct AirtableConfig {
-    pub key: String,
-    pub space: String,
-}
-
 
 fn main() {
     let matches = matches();
@@ -97,9 +90,9 @@ fn main() {
         },
         None => HashSet::new()
     };
-    let airtable_config = config.airtable.unwrap_or(AirtableConfig { key: "".to_string(), space: "".to_string()});
-    let airtable = if (&airtable_config.key).len() > 0 && (&airtable_config.space).len() > 0 {
-        Some(AirtableClient::new(&airtable_config.key, &airtable_config.space))
+    let airtable_config = config.airtable.unwrap_or(AirtableConfig { key: "".to_string(), app: "".to_string(), table: "".to_string(), column_map: None});
+    let airtable = if (&airtable_config.key).len() > 0 && (&airtable_config.app).len() > 0 {
+        Some(AirtableClient::new(&airtable_config))
     } else {
         None
     };
@@ -133,6 +126,9 @@ fn main() {
         print_prices(Box::leak(prices));
     } else if let Some(_matches) = matches.subcommand_matches("balance") {
         let base_currency = _matches.value_of("base").unwrap_or("BTC").to_ascii_uppercase();
+        if base_currency != "BTC" {
+            panic!("BTC is currently the only supported base currency for balance operations.")
+        }
         let index_size = _matches.value_of("size").unwrap_or("10");
         let index_size_i: u64 = index_size.parse().unwrap();
         let lookback = _matches.value_of("lookback").unwrap_or("20");
@@ -217,16 +213,27 @@ fn get_tradeable_symbols(base_currency: &str, blacklist: &HashSet<String>, binan
     tradable_symbols
 }
 
+#[derive(Deserialize,Serialize)]
+struct AccountRecord {
+    total_usd: f64,
+    total_btc: f64,
+    timestamp: String,
+    details: String
+}
 fn save_account(airtable: &AirtableClient, account: &Account) {
     let now = Utc::now();
-    let position_str = serde_json::to_string_pretty(&account.balances).unwrap();
-    let value = serde_json::json!({
-        "Timestamp": now.to_string(),
-        "Value (USD)": account.total_usd,
-        "Value (BTC)": account.total_btc,
-        "Positions": position_str
-    });
-    airtable.create_record("Portfolio History".to_owned(), &value);
+    let account_str = serde_json::to_string_pretty(&account.balances).unwrap();
+    let value = AccountRecord {
+        total_usd: account.total_usd,
+        total_btc: account.total_btc,
+        timestamp: now.to_string(),
+        details: account_str
+    };
+    let value_json = serde_json::to_value(value).unwrap();
+    match airtable.create_record(value_json) {
+        Ok(_) => println!("Successfully saved portfolio to airtable."),
+        Err(e) => println!("Error saving portfolio to airtable: ${}", e.status().unwrap())
+    };
 }
 
 fn balance_by_market_cap(
@@ -311,16 +318,16 @@ fn matches() -> clap::ArgMatches<'static> {
         (@arg CONFIG: -c --config +takes_value "Sets a custom config file")
         (@arg debug: -d ... "Sets the level of debugging information")
         (@subcommand account =>
-            (about: "show portfolio details")
+            (about: "Show positions and their values")
             (version: "1.0")
             (@arg verbose: -v --verbose "Print test information verbosely")
         )
         (@subcommand cmc =>
-            (about: "list recent prices from cmc in USD")
+            (about: "List current prices from CoinMarketCap")
             (version: "1.0")
         )
         (@subcommand save =>
-            (about: "test save portfolio")
+            (about: "Save your current account information to airtable")
             (version: "1.0")
         )
         (@subcommand symbols =>
@@ -329,11 +336,11 @@ fn matches() -> clap::ArgMatches<'static> {
             (@arg base: -b --base +takes_value "The base currency for the given trading symbols")
         )
         (@subcommand binance =>
-            (about: "print exchange prices")
+            (about: "Print prices for assets on the binance exchange.")
             (version: "1.0")
         )
         (@subcommand config =>
-            (about: "print config information")
+            (about: "Print config information")
             (version: "1.0")
         )
         (@subcommand balance =>
@@ -354,7 +361,7 @@ fn matches() -> clap::ArgMatches<'static> {
         (@subcommand enter =>
             (about: "enter a position by buying a currency with a base currency")
             (version: "1.0")
-            (@arg position: -p --position +takes_value +required "Specify a single position to enter. If omitted, all positions are exited.")
+            (@arg position: -p --position +takes_value +required "Specify a single position to enter.")
             (@arg amount: -a --amount +takes_value "Specify how much should be spent in terms of the base currency. If omitted, the entire base currency position will be used.")
             (@arg base: -b --base +takes_value "Exit all positions selling into a single base currency. Defaults to BTC.")
         )

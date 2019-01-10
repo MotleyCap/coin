@@ -1,36 +1,91 @@
 use reqwest;
 use std::collections::{HashMap};
-use serde_json::{Value};
+use serde_json::{Value, Map};
 
 const AIRTABLE_BASE_URL: &str = "https://api.airtable.com/v0";
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct AirtableConfig {
+    pub key: String,
+    pub app: String,
+    pub table: String,
+    pub column_map: Option<ColumnMap>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct ColumnMap {
+    pub total_btc: Option<String>,
+    pub total_usd: Option<String>,
+    pub timestamp: Option<String>,
+    pub details: Option<String>,
+}
+
 pub struct AirtableClient<'a> {
-  api_key: &'a str,
-  api_id: &'a str,
+  config: &'a AirtableConfig,
   client: reqwest::Client,
 }
 impl<'a> AirtableClient<'a> {
-  pub fn new(key: &'a str, id: &'a str) -> Self {
+  pub fn new(config: &'a AirtableConfig) -> Self {
     let client = reqwest::Client::new();
     AirtableClient {
-      api_key: key,
-      api_id: id,
+      config: config,
       client: client,
     }
   }
-  pub fn create_record(&self, base: String, record: &Value) {
-    let url = format!("{}/{}/{}", AIRTABLE_BASE_URL, self.api_id, escape_spaces(base));
-    println!("Saving to url {}", url);
+  fn replace_record(&self, record: Value) -> Value {
+    let formatted = if let Some(cm) = &self.config.column_map {
+      let mut value = Map::new();
+      let btc_key = match &cm.total_btc {
+        Some(s) => s.to_string(),
+        None => "Value (BTC)".to_string()
+      };
+      let usd_key = match &cm.total_usd {
+        Some(s) => s.to_string(),
+        None => "Value (USD)".to_string()
+      };
+      let details_key = match &cm.details {
+        Some(s) => s.to_string(),
+        None => "Details".to_string()
+      };
+      let ts_key = match &cm.timestamp {
+        Some(s) => s.to_string(),
+        None => "Timestamp".to_string()
+      };
+      value.insert(
+        btc_key,
+        serde_json::to_value(record.get("total_btc").unwrap().as_f64().unwrap()).unwrap()
+      );
+      value.insert(
+        usd_key,
+        serde_json::to_value(record.get("total_usd").unwrap().as_f64().unwrap()).unwrap()
+      );
+      value.insert(
+        details_key,
+        serde_json::to_value(record.get("details").unwrap().as_str().unwrap()).unwrap()
+      );
+      value.insert(
+        ts_key,
+        serde_json::to_value(record.get("timestamp").unwrap().as_str().unwrap()).unwrap()
+      );
+      serde_json::to_value(value).unwrap()
+    } else {
+      record
+    };
+    formatted
+  }
+  pub fn create_record(&self, record: Value) -> reqwest::Result<String> {
+    let url = format!("{}/{}/{}", AIRTABLE_BASE_URL, self.config.app, escape_spaces(self.config.table.to_string()));
+    let formatted = self.replace_record(record);
     let mut data = HashMap::new();
-    data.insert("fields", record);
+    data.insert("fields", formatted);
     // TODO: Handle error gracefully.
     let response = match self.client.post(&url)
       .header("Content-Type", "application/json")
-      .header("Authorization", format!("Bearer {}", self.api_key))
+      .header("Authorization", format!("Bearer {}", self.config.key))
       .json(&data)
       .send() {
-        Ok(mut o) => println!("{:?}", o.text()),
-        Err(e) => panic!(e)
+        Ok(mut d) => d.text(),
+        Err(e) => Err(e)
       };
     response
   }
