@@ -32,7 +32,7 @@ impl Portfolio {
   pub fn balance_by_market_cap(&self) -> HashMap<String, f64> {
     let smoothed_caps = self.smooth_market_caps();
     let mut total_sum = 0.0;
-    for (symbol, cap) in &smoothed_caps {
+    for (_, cap) in &smoothed_caps {
       total_sum = total_sum + cap;
     }
     let mut percs = HashMap::new();

@@ -97,7 +97,7 @@ impl CMCClient {
     body
   }
 
-  pub fn historic_quotes(&self, symbol: &str, count: u64, interval: &str) -> CMCHistoricalQuotesResponse {
+  pub fn historic_quotes(&self, symbol: &str, count: u64, _interval: &str) -> CMCHistoricalQuotesResponse {
     let current_epoch = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
         Ok(n) => n.as_secs(), // println!("1970-01-01 00:00:00 UTC was {} seconds ago!", ),
         Err(_) => panic!("SystemTime before UNIX EPOCH!"),
