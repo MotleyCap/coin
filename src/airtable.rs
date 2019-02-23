@@ -14,6 +14,7 @@ pub struct AirtableConfig {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ColumnMap {
+    pub name: Option<String>,
     pub total_btc: Option<String>,
     pub total_usd: Option<String>,
     pub timestamp: Option<String>,
@@ -51,6 +52,10 @@ impl<'a> AirtableClient<'a> {
         Some(s) => s.to_string(),
         None => "Timestamp".to_string()
       };
+      let name_key = match &cm.name {
+        Some(s) => s.to_string(),
+        None => "Name".to_string()
+      };
       value.insert(
         btc_key,
         serde_json::to_value(record.get("total_btc").unwrap().as_f64().unwrap()).unwrap()
@@ -66,6 +71,10 @@ impl<'a> AirtableClient<'a> {
       value.insert(
         ts_key,
         serde_json::to_value(record.get("timestamp").unwrap().as_str().unwrap()).unwrap()
+      );
+      value.insert(
+        name_key,
+        serde_json::to_value(record.get("name").unwrap().as_str().unwrap()).unwrap()
       );
       serde_json::to_value(value).unwrap()
     } else {

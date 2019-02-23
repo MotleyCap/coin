@@ -114,7 +114,6 @@ impl CMCClient {
       beginning_of_period,
       beginning_of_today
     );
-    println!("Fetching historic market prices for {}", symbol);
     let body: CMCHistoricalQuotesResponse = match get(url) {
       Ok(mut data) => {
         match data.json() {

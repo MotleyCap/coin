@@ -8,8 +8,10 @@ use crate::errors::*;
 use crate::model::{ExchangeOps,Balance,Price,Order};
 
 pub struct BinanceClient<'a> {
+  pub name: &'a str,
   pub key: &'a str,
   pub secret: &'a str,
+  pub readonly: bool,
   pub account: Account,
   pub market: Market,
   rounding: HashMap<String, i32>,
@@ -187,12 +189,14 @@ impl<'a> ExchangeOps for BinanceClient<'a> {
 }
 
 impl<'a> BinanceClient<'a> {
-  pub fn new(key: &'a str, secret: &'a str) -> Self {
+  pub fn new(key: &'a str, secret: &'a str, name: &'a str, readonly: bool) -> Self {
     let account = Binance::new(Some(key.to_owned()), Some(secret.to_owned()));
     let market: Market = Binance::new(None, None);
     BinanceClient {
+      name: name,
       account: account,
       key: key,
+      readonly: readonly,
       secret: secret,
       market: market,
       rounding: BinanceClient::make_rounding_rules(),

@@ -91,6 +91,226 @@ fn alternative_main() {
     }
 }
 
+// Use this macro to auto-generate the main above. You may want to
+// set the `RUST_BACKTRACE` env variable to see a backtrace.
+// quick_main!(run);
+
+// Most functions will return the `Result` type, imported from the
+// `errors` module. It is a typedef of the standard `Result` type
+// for which the error type is always our own `Error`.
+fn run() -> Result<()> {
+    let matches = matches();
+    let raw_config: Result<Config> = get_config();
+    let config: Config = match raw_config {
+        Err(e) => bail!(Error::with_chain(e, "Error loading config.")),
+        Ok(c) => c
+    };
+    // let key = config.binance.key.to_owned();
+    // let secret = config.binance.secret.to_owned();
+    let cmc_key = config.cmc.key.to_owned();
+    let blacklisted_symbols: HashSet<_> = match &config.blacklist {
+        Some(l) => {
+            let as_set: HashSet<String> = l.iter().map(|s| s.to_string()).collect();
+            as_set
+        },
+        None => HashSet::new()
+    };
+    let default_airtable_config = AirtableConfig { key: "".to_string(), app: "".to_string(), table: "".to_string(), column_map: None};
+    let airtable_config = match &config.airtable {
+        Some(atc) => &atc,
+        None => &default_airtable_config
+    };
+    let airtable = if (&airtable_config.key).len() > 0 && (&airtable_config.app).len() > 0 {
+        Some(AirtableClient::new(&airtable_config))
+    } else {
+        None
+    };
+    let binance_clients = get_binance_clients(&config.binance);
+    if binance_clients.len() == 0 {
+        bail!("You must provide at least one pair of binance credentials.");
+    }
+    let binance_read_client = binance_clients.first().unwrap();
+    let cmc = CMCClient::new(cmc_key);
+    if let Some(_matches) = matches.subcommand_matches("account") {
+        let prices = cmc.latest_listings(100);
+        let balances = if let Some(accounts_to_list) = _matches.values_of("name") {
+            let mut valid_clients: Vec<BinanceClient> = Vec::new();
+            let mut acct_set: HashSet<&str> = HashSet::new();
+            for acct_to_list in accounts_to_list {
+                acct_set.insert(acct_to_list);
+            }
+            for client in binance_clients {
+                if acct_set.contains(&client.name) {
+                    valid_clients.push(client);
+                }
+            }
+            // let vec_of_accounts: Vec<&str> = accounts_to_list.collect();
+            // let valid_clients: Vec<BinanceClient> = binance_clients.iter().filter(|c| vec_of_accounts.contains(&c.name)).collect();
+            get_all_accounts(&valid_clients)
+        } else {
+            get_all_accounts(&binance_clients)
+        };
+        match make_account(&balances, &prices) {
+            Ok(acct) => {
+                print_account(&acct);
+                Ok(())
+            },
+            Err(e) => Err(e)
+        }
+    } else if let Some(_matches) = matches.subcommand_matches("save") {
+        let prices = cmc.latest_listings(100);
+        for binance in &binance_clients {
+            match binance.all_balances() {
+                Ok(balances) => {
+                    match make_account(&balances, &prices) {
+                        Ok(account) => {
+                            if let Some(a_t) = &airtable {
+                                save_account(&a_t, &account, &binance.name);
+                            } else {
+                                println!("Could not find airtable credentials in ~/.coin.yaml");
+                            }
+                        },
+                        Err(e) => bail!(e)
+                    }
+                },
+                Err(e) => bail!(e)
+            }
+        }
+        let all_balances = get_all_accounts(&binance_clients);
+        match make_account(&all_balances, &prices) {
+            Ok(account) => {
+                if let Some(a_t) = &airtable {
+                    save_account(&a_t, &account, "ALL");
+                } else {
+                    println!("Could not find airtable credentials in ~/.coin.yaml");
+                }
+            },
+            Err(e) => bail!(e)
+        }
+        Ok(())
+    } else if let Some(_matches) = matches.subcommand_matches("symbols") {
+        let base_currency = _matches.value_of("base").unwrap_or("BTC").to_ascii_uppercase();
+        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, &binance_read_client, &cmc);
+        println!("Tradable symbols: {:?}", tradable_symbols);
+        Ok(())
+    } else if let Some(_matches) = matches.subcommand_matches("cmc") {
+        let prices = cmc.latest_listings(100);
+        print_cmc_listings(&prices);
+        Ok(())
+    } else if let Some(_matches) = matches.subcommand_matches("config") {
+        println!("{}", toml::to_string_pretty(&config).unwrap_or("Could not find ~/.coin.env".to_owned()));
+        Ok(())
+    } else if let Some(_matches) = matches.subcommand_matches("binance") {
+        match binance_read_client.all_prices() {
+            Ok(prices) => {
+                print_prices(prices);
+                Ok(())
+            },
+            Err(e) => Err(e)
+        }
+    } else if let Some(_matches) = matches.subcommand_matches("balance") {
+        let base_currency = _matches.value_of("base").unwrap_or("BTC").to_uppercase();
+        if base_currency != "BTC" {
+            bail!("BTC is currently the only supported base currency for balance operations.")
+        }
+        let index_size = _matches.value_of("size").unwrap_or("20");
+        let index_size_i: u64 = index_size.parse().unwrap();
+        let lookback = _matches.value_of("lookback").unwrap_or("20");
+        let lookback_i: u64 = lookback.parse().unwrap();
+        let factor = _matches.value_of("factor").unwrap_or("0.3");
+        let factor_i: f64 = factor.parse().unwrap();
+        let is_mock = _matches.is_present("mock");
+        // Find all pairs that trade with the base pai
+        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, &binance_read_client, &cmc)?;
+        // First exit the market to the base currency.
+        for trading_client in &binance_clients {
+            if trading_client.readonly {
+                continue;
+            }
+            if !is_mock {
+                if let Ok(orders) = trading_client.exit_market(base_currency.to_owned()) {
+                    let order_ids_str = orders.iter().map(|o| o.id.to_string()).collect::<Vec<String>>();
+                    println!("Successfully exited old positions with order_ids: [{}]", order_ids_str.join(", ").blue());
+                }
+            }
+            let cmc_prices = cmc.latest_listings(100);
+            let balanced_portfolio = balance_by_market_cap(&cmc, &cmc_prices.data, index_size_i, lookback_i, factor_i, &tradable_symbols);
+            print_portfolio(&balanced_portfolio);
+            // Calculating total value
+            if !is_mock {
+                match trading_client.enter_market(base_currency.to_owned(), &balanced_portfolio) {
+                    Ok(vec_of_orders) => {
+                        let order_ids_str = vec_of_orders.iter().map(|o| o.id.to_string()).collect::<Vec<String>>();
+                        if let Some(a_t) = &airtable {
+                            if let Ok(balances) = trading_client.all_balances() {
+                                // let account = make_account(&balances, cmc_prices);
+                                if let Ok(account) = make_account(&balances, &cmc_prices) {
+                                    save_account(&a_t, &account, trading_client.key)
+                                }
+                            } else {
+                                println!("Error saving to airtable");
+                            }
+                        }
+                        println!("Successfully entered new positions with order_ids: [{}]", order_ids_str.join(", ").blue());
+                    },
+                    Err(e) => println!("Failed to enter market for account {}\n{:?}", trading_client.key.red(), e)
+                }
+            }
+        }
+        Ok(())
+    } else if let Some(_matches) = matches.subcommand_matches("buy") {
+        let amount_to_buy: f64 = match _matches.value_of("amount") {
+            Some(a) => {
+                if let Ok(_a) = a.parse::<f64>() {
+                    _a
+                } else {
+                    bail!("Invalid amount {}", a)
+                }
+            },
+            None => bail!("You must provide an amount to buy.")
+        };
+        let asset_to_buy = match _matches.value_of("asset") {
+            Some(at) => at.to_uppercase(),
+            None => bail!("You must provide the symbol of the asset you want to buy.")
+        };
+        let asset_to_buy_with = _matches.value_of("with").unwrap_or("BTC").to_uppercase();
+        let account_to_buy_with = _matches.value_of("name").unwrap();
+        if let Some(trading_client) = &binance_clients.iter().find(|i| i.name == account_to_buy_with) {
+            match trading_client.market_buy(asset_to_buy, asset_to_buy_with, amount_to_buy) {
+                Ok(order) => {
+                    println!("Successfully bought {:?}", order);
+                    Ok(())
+                },
+                Err(e) => Err(e)
+            }
+        } else {
+            Ok(())
+        }
+    } else {
+        bail!("Unknown command")
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+struct Config {
+    pub blacklist: Option<Vec<String>>,
+    pub binance: Vec<BinanceConfig>,
+    pub cmc: CMCConfig,
+    pub airtable: Option<AirtableConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+struct BinanceConfig {
+    pub name: Option<String>,
+    pub key: String,
+    pub secret: String,
+    pub readonly: Option<bool>
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+struct CMCConfig {
+    pub key: String,
+}
 fn get_config() -> Result<Config> {
     let coin_file = if let Some(p) = home_dir() {
         match fs::read_to_string(p.join(".coin.toml")) {
@@ -114,207 +334,42 @@ fn get_config() -> Result<Config> {
     }
 }
 
-// Use this macro to auto-generate the main above. You may want to
-// set the `RUST_BACKTRACE` env variable to see a backtrace.
-// quick_main!(run);
-
-// Most functions will return the `Result` type, imported from the
-// `errors` module. It is a typedef of the standard `Result` type
-// for which the error type is always our own `Error`.
-fn run() -> Result<()> {
-    let matches = matches();
-    let raw_config: Result<Config> = get_config();
-    let config: Config = match raw_config {
-        Err(e) => bail!(Error::with_chain(e, "Error loading config.")),
-        Ok(c) => c
-    };
-    let key = config.binance.key.to_owned();
-    let secret = config.binance.secret.to_owned();
-    let cmc_key = config.cmc.key.to_owned();
-    let blacklisted_symbols: HashSet<_> = match &config.blacklist {
-        Some(l) => {
-            let as_set: HashSet<String> = l.iter().map(|s| s.to_string()).collect();
-            as_set
-        },
-        None => HashSet::new()
-    };
-    let default_airtable_config = AirtableConfig { key: "".to_string(), app: "".to_string(), table: "".to_string(), column_map: None};
-    let airtable_config = match &config.airtable {
-        Some(atc) => &atc,
-        None => &default_airtable_config
-    };
-    let airtable = if (&airtable_config.key).len() > 0 && (&airtable_config.app).len() > 0 {
-        Some(AirtableClient::new(&airtable_config))
-    } else {
-        None
-    };
-    let binance = BinanceClient::new(&key[..], &secret[..]);
-    let cmc = CMCClient::new(cmc_key);
-    if let Some(_matches) = matches.subcommand_matches("account") {
-        match binance.all_balances() {
-            Ok(balances) => {
-                let prices = cmc.latest_listings(100);
-                match make_account(&balances, prices) {
-                    Ok(acct) => {
-                        print_account(&acct);
-                        return Ok(())
-                    },
-                    Err(e) => Err(e)
-                }
-            },
-            Err(e) => Err(e)
-        }
-    } else if let Some(_matches) = matches.subcommand_matches("save") {
-        match binance.all_balances() {
-            Ok(balances) => {
-                let prices = cmc.latest_listings(100);
-                match make_account(&balances, prices) {
-                    Ok(account) => {
-                        if let Some(a_t) = airtable {
-                            save_account(&a_t, &account);
-                        } else {
-                            println!("Could not find airtable credentials in ~/.coin.yaml");
-                        }
-                        Ok(())
-                    },
-                    Err(e) => Err(e)
-                }
-            },
-            Err(e) => Err(e)
-        }
-    } else if let Some(_matches) = matches.subcommand_matches("symbols") {
-        let base_currency = _matches.value_of("base").unwrap_or("BTC").to_ascii_uppercase();
-        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, &binance, &cmc);
-        println!("Tradable symbols: {:?}", tradable_symbols);
-        Ok(())
-    } else if let Some(_matches) = matches.subcommand_matches("cmc") {
-        let prices = cmc.latest_listings(100);
-        print_cmc_listings(&prices);
-        Ok(())
-    } else if let Some(_matches) = matches.subcommand_matches("config") {
-        println!("{}", toml::to_string_pretty(&config).unwrap_or("Could not find ~/.coin.env".to_owned()));
-        Ok(())
-    } else if let Some(_matches) = matches.subcommand_matches("binance") {
-        match binance.all_prices() {
-            Ok(prices) => {
-                print_prices(prices);
-                Ok(())
-            },
-            Err(e) => Err(e)
-        }
-    } else if let Some(_matches) = matches.subcommand_matches("balance") {
-        let base_currency = _matches.value_of("base").unwrap_or("BTC").to_uppercase();
-        if base_currency != "BTC" {
-            bail!("BTC is currently the only supported base currency for balance operations.")
-        }
-        let index_size = _matches.value_of("size").unwrap_or("10");
-        let index_size_i: u64 = index_size.parse().unwrap();
-        let lookback = _matches.value_of("lookback").unwrap_or("20");
-        let lookback_i: u64 = lookback.parse().unwrap();
-        let factor = _matches.value_of("factor").unwrap_or("0.3");
-        let factor_i: f64 = factor.parse().unwrap();
-        let is_mock = _matches.is_present("mock");
-        // Find all pairs that trade with the base pai
-        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, &binance, &cmc)?;
-        // First exit the market to the base currency.
-        if !is_mock {
-            if let Ok(orders) = binance.exit_market(base_currency.to_owned()) {
-                let order_ids_str = orders.iter().map(|o| o.id.to_string()).collect::<Vec<String>>();
-                println!("Successfully exited old positions with order_ids: [{}]", order_ids_str.join(", ").blue());
-            }
-        }
-        let cmc_prices = cmc.latest_listings(100);
-        let balanced_portfolio = balance_by_market_cap(&cmc, &cmc_prices.data, index_size_i, lookback_i, factor_i, tradable_symbols);
-        print_portfolio(&balanced_portfolio);
-        // Calculating total value
-        if !is_mock {
-            match binance.enter_market(base_currency.to_owned(), &balanced_portfolio) {
-                Ok(vec_of_orders) => {
-                    let order_ids_str = vec_of_orders.iter().map(|o| o.id.to_string()).collect::<Vec<String>>();
-                    if let Some(a_t) = airtable {
-                        if let Ok(balances) = binance.all_balances() {
-                            // let account = make_account(&balances, cmc_prices);
-                            if let Ok(account) = make_account(&balances, cmc_prices) {
-                                save_account(&a_t, &account)
-                            }
-                        } else {
-                            println!("Error saving to airtable");
-                        }
-                    }
-                    println!("Successfully entered new positions with order_ids: [{}]", order_ids_str.join(", ").blue());
-                    Ok(())
-                },
-                Err(e) => Err(Error::with_chain(e, "Error entering market."))
-            }
-        } else {
-            Ok(())
-        }
-    } else if let Some(_matches) = matches.subcommand_matches("buy") {
-        let amount_to_buy: f64 = match _matches.value_of("amount") {
-            Some(a) => {
-                if let Ok(_a) = a.parse::<f64>() {
-                    _a
-                } else {
-                    bail!("Invalid amount {}", a)
-                }
-            },
-            None => bail!("You must provide an amount to buy.")
-        };
-        let asset_to_buy = match _matches.value_of("asset") {
-            Some(at) => at.to_uppercase(),
-            None => bail!("You must provide the symbol of the asset you want to buy.")
-        };
-        let asset_to_buy_with = _matches.value_of("with").unwrap_or("BTC").to_uppercase();
-        match binance.market_buy(asset_to_buy, asset_to_buy_with, amount_to_buy) {
-            Ok(order) => {
-                println!("Successfully bought {:?}", order);
-                Ok(())
-            },
-            Err(e) => Err(e)
-        }
-    } else if let Some(_matches) = matches.subcommand_matches("exit") {
-        let base_currency = _matches.value_of("base").unwrap_or("BTC");
-        if _matches.is_present("get_balance") {
-            let position_to_exit = _matches.value_of("get_balance").unwrap();
-            match binance.market_sell_all(position_to_exit.to_owned(), base_currency.to_owned()) {
-                Ok(order) => {
-                    println!("Successfully exited {} with order_id: {}", position_to_exit, order.id.to_string().green());
-                    Ok(())
-                },
-                Err(e) => Err(e)
-            }
-        } else {
-            match binance.exit_market(base_currency.to_owned()) {
-                Ok(orders) => {
-                    let order_ids_str = orders.iter().map(|o| o.id.to_string()).collect::<Vec<String>>();
-                    println!("Successfully exited all positions with order_ids: [{}]", order_ids_str.join(", ").blue());
-                    Ok(())
-                },
-                Err(e) => Err(e)
-            }
-        }
-    } else {
-        bail!("Unknown command")
+fn get_binance_clients(configs: &Vec<BinanceConfig>) -> Vec<BinanceClient> {
+    let mut vec_of_clients: Vec<BinanceClient> = Vec::new();
+    for config in configs {
+        let is_read_only = config.readonly.unwrap_or(false);
+        let name: &str = config.name.as_ref().map_or(&config.key, |i| i);
+        vec_of_clients.push(BinanceClient::new(&config.key, &config.secret, name, is_read_only));
     }
+    vec_of_clients
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-struct Config {
-    pub blacklist: Option<Vec<String>>,
-    pub binance: BinanceConfig,
-    pub cmc: CMCConfig,
-    pub airtable: Option<AirtableConfig>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct BinanceConfig {
-    pub key: String,
-    pub secret: String,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct CMCConfig {
-    pub key: String,
+fn get_all_accounts(clients: &Vec<BinanceClient>) -> Vec<Balance> {
+    // let all_balances: Vec<Balance> = Vec::new();
+    let mut all_balances: HashMap<String, Balance> = HashMap::new();
+    for client in clients {
+        let client_account = match client.all_balances() {
+            Ok(balances) => Some(balances),
+            Err(_) => None
+        };
+        if let Some(account) = client_account {
+            for balance in account {
+                if let Some(existing_balance) = all_balances.get(&balance.symbol[..]) {
+                    let new_balance = Balance {
+                        free: existing_balance.free + balance.free,
+                        symbol: existing_balance.symbol.to_owned(),
+                        locked: existing_balance.locked + balance.locked
+                    };
+                    all_balances.insert(balance.symbol.to_owned(), new_balance);
+                } else {
+                    all_balances.insert(balance.symbol.to_owned(), balance);
+                }
+            }
+        } else {
+            println!("Could not fetch balances for account: {}", client.key);
+        }
+    }
+    all_balances.iter().map(|(_, val)| val.clone()).collect::<Vec<Balance>>()
 }
 
 fn get_tradeable_symbols(base_currency: &str, blacklist: &HashSet<String>, binance: &BinanceClient, cmc: &CMCClient) -> Result<HashSet<String>> {
@@ -348,14 +403,16 @@ struct AccountRecord {
     total_usd: f64,
     total_btc: f64,
     timestamp: String,
-    details: String
+    details: String,
+    name: String
 }
-fn save_account(airtable: &AirtableClient, account: &Account) {
+fn save_account(airtable: &AirtableClient, account: &Account, name: &str) {
     let now = Utc::now();
     let account_str = serde_json::to_string_pretty(&account.balances).unwrap();
     let value = AccountRecord {
         total_usd: account.total_usd,
         total_btc: account.total_btc,
+        name: name.to_owned(),
         timestamp: now.to_string(),
         details: account_str
     };
@@ -372,7 +429,7 @@ fn balance_by_market_cap(
     index_size: u64,
     lookback: u64,
     smoothing_factor: f64,
-    tradable_assets: HashSet<String>
+    tradable_assets: &HashSet<String>
 ) -> HashMap<String, f64> {
     let mut market_caps = HashMap::new();
     let mut seen_assets = 0;
@@ -455,6 +512,7 @@ fn matches() -> clap::ArgMatches<'static> {
             (about: "Show positions and their values")
             (version: "1.0")
             (@arg verbose: -v --verbose "Print test information verbosely")
+            (@arg name: -n --name +takes_value +multiple "Specify accounts to list details about.")
         )
         (@subcommand cmc =>
             (about: "List current prices from CoinMarketCap")
@@ -486,18 +544,20 @@ fn matches() -> clap::ArgMatches<'static> {
             (@arg factor: -f --factor +takes_value "Specifies the smoothing factor for the moving average calculation. Defaults to 0.3.")
             (@arg mock: -m --mock "Preview the balance event but do not execute any trades.")
         )
-        (@subcommand sell =>
-            (about: "Sell one asset for another asset.")
-            (version: "1.0")
-            (@arg amount: +takes_value +required "Specify how much of the asset you would like to sell. Use the string all to sell as much of the asset as possible.")
-            (@arg asset: +takes_value +required "Specify the symbol of the asset that you would like to sell.")
-            (@arg into: -f --for +takes_value "Specify which asset you would like to sell into.")
-        )
+        // (@subcommand sell =>
+        //     (about: "Sell one asset for another asset.")
+        //     (version: "1.0")
+        //     (@arg name: +takes_value +required "Specify the name of the account in ~/.coin.toml to use to sell the asset.")
+        //     (@arg amount: +takes_value +required "Specify how much of the asset you would like to sell. Use the string all to sell as much of the asset as possible.")
+        //     (@arg asset: +takes_value +required "Specify the symbol of the asset that you would like to sell.")
+        //     (@arg into: -i --info +takes_value "Specify which asset you would like to sell into.")
+        // )
         (@subcommand buy =>
             (about: "Buy one asset --with another asset.")
             (version: "1.0")
-            (@arg amount: -a --amount +takes_value "Specify how much should be spent in terms of the base currency. Use the string all to buy as much ETH as possible.")
+            (@arg name: +takes_value +required "Specify the name of the account in ~/.coin.toml to use to buy the asset.")
             (@arg asset: +takes_value +required "Specify the symbol of the asset that you would like to buy.")
+            (@arg amount: -a --amount +takes_value "Specify how much should be spent in terms of the base currency. Use the string all to buy as much ETH as possible.")
             (@arg with: -w --with +takes_value "Specify which currency you would like to use to buy the asset. Defaults to BTC.")
         )
     ).get_matches();
@@ -534,7 +594,7 @@ impl AccountBalance {
         (self.value_btc * BTC_FORMAT_MULTIPLIER).round()/BTC_FORMAT_MULTIPLIER
     }
 }
-fn make_account(balances: &Vec<Balance>, prices: CMCListingResponse) -> Result<Account> {
+fn make_account(balances: &Vec<Balance>, prices: &CMCListingResponse) -> Result<Account> {
     let price_map = cmc_listings_as_map(prices);
     let price_btc = match price_map.get("BTC") {
         Some(price) => match price.quote.get("USD") {
@@ -636,9 +696,9 @@ fn print_account(account: &Account) {
     table.printstd();
 }
 
-fn cmc_listings_as_map<'a>(listing: CMCListingResponse) -> HashMap<String, CMCListing> {
+fn cmc_listings_as_map<'a>(listing: &'a CMCListingResponse) -> HashMap<String, &'a CMCListing> {
     let mut h_map = HashMap::new();
-    for l in listing.data {
+    for l in &listing.data {
         h_map.insert(l.symbol.to_owned(), l);
     }
     h_map
