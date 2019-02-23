@@ -91,15 +91,7 @@ fn alternative_main() {
     }
 }
 
-// Use this macro to auto-generate the main above. You may want to
-// set the `RUST_BACKTRACE` env variable to see a backtrace.
-// quick_main!(run);
-
-// Most functions will return the `Result` type, imported from the
-// `errors` module. It is a typedef of the standard `Result` type
-// for which the error type is always our own `Error`.
-fn run() -> Result<()> {
-    let matches = matches();
+fn get_config() -> Result<Config> {
     let coin_file = if let Some(p) = home_dir() {
         match fs::read_to_string(p.join(".coin.toml")) {
             Ok(contents) => {
@@ -110,19 +102,31 @@ fn run() -> Result<()> {
     } else {
         bail!("Could not find ~/.coin.toml")
     };
-    let raw_config: Option<Config> = match &coin_file {
+    match &coin_file {
         Some(contents) => {
             let conf: Config = match toml::from_str(&contents) {
                 Ok(conts) => conts,
                 Err(e) => bail!(Error::with_chain(e, "Error parsing .coin.toml"))
             };
-            Some(conf)
+            Ok(conf)
         },
-        None => None
-    };
+        None => bail!("Could not find ~/.coin.toml")
+    }
+}
+
+// Use this macro to auto-generate the main above. You may want to
+// set the `RUST_BACKTRACE` env variable to see a backtrace.
+// quick_main!(run);
+
+// Most functions will return the `Result` type, imported from the
+// `errors` module. It is a typedef of the standard `Result` type
+// for which the error type is always our own `Error`.
+fn run() -> Result<()> {
+    let matches = matches();
+    let raw_config: Result<Config> = get_config();
     let config: Config = match raw_config {
-        None => bail!("Could not find ~/.coin.toml"),
-        Some(c) => c
+        Err(e) => bail!(Error::with_chain(e, "Error loading config.")),
+        Ok(c) => c
     };
     let key = config.binance.key.to_owned();
     let secret = config.binance.secret.to_owned();
@@ -134,7 +138,11 @@ fn run() -> Result<()> {
         },
         None => HashSet::new()
     };
-    let airtable_config = config.airtable.unwrap_or(AirtableConfig { key: "".to_string(), app: "".to_string(), table: "".to_string(), column_map: None});
+    let default_airtable_config = AirtableConfig { key: "".to_string(), app: "".to_string(), table: "".to_string(), column_map: None};
+    let airtable_config = match &config.airtable {
+        Some(atc) => &atc,
+        None => &default_airtable_config
+    };
     let airtable = if (&airtable_config.key).len() > 0 && (&airtable_config.app).len() > 0 {
         Some(AirtableClient::new(&airtable_config))
     } else {
@@ -184,7 +192,7 @@ fn run() -> Result<()> {
         print_cmc_listings(&prices);
         Ok(())
     } else if let Some(_matches) = matches.subcommand_matches("config") {
-        println!("{}", coin_file.unwrap_or("Could not find ~/.coin.env".to_owned()));
+        println!("{}", toml::to_string_pretty(&config).unwrap_or("Could not find ~/.coin.env".to_owned()));
         Ok(())
     } else if let Some(_matches) = matches.subcommand_matches("binance") {
         match binance.all_prices() {
@@ -379,6 +387,10 @@ fn balance_by_market_cap(
             continue;
         }
         let historical_quotes = cmc.historic_quotes(&price.symbol, lookback, "daily");
+        if historical_quotes.result.len() == 0 {
+            println!("Could not find market cap information for {}", &price.symbol);
+            continue;
+        }
         // Slow rate to 5 reqs a second
         // let throttle_length = time::Duration::from_millis(200);
         // thread::sleep(throttle_length);
@@ -401,7 +413,7 @@ fn balance_by_market_cap(
     }
     let portfolio = Portfolio::new(market_caps, smoothing_factor);
     let allotments = portfolio.balance_by_market_cap();
-    // table.printstd();
+    table.printstd();
     allotments
 }
 

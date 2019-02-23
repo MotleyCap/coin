@@ -55,7 +55,7 @@ pub struct CMCHistoricalQuotes {
   pub symbol: String,
   pub quotes: Vec<CMCHistoricalQuote>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize,Debug)]
 pub struct CMCHistoricalQuotesResponse {
   pub result: Vec<(u64, f64)>,
 }
@@ -116,13 +116,15 @@ impl CMCClient {
     );
     println!("Fetching historic market prices for {}", symbol);
     let body: CMCHistoricalQuotesResponse = match get(url) {
-      Ok(mut data) => match data.json() {
-        Ok(o) => o,
-        Err(e) => {
-          println!("{}",e);
-          println!("{:?}", data);
-          panic!(e);
-        },
+      Ok(mut data) => {
+        match data.json() {
+          Ok(o) => o,
+          Err(e) => {
+            println!("{}",e);
+            println!("{:?}", data);
+            panic!(e);
+          },
+        }
       },
       Err(e) => panic!(e),
     };
