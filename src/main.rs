@@ -12,9 +12,11 @@ mod portfolio;
 mod cmc;
 mod model;
 mod binance;
+mod coinbase;
 mod airtable;
 
 use crate::binance::{BinanceClient};
+use crate::coinbase::{CoinbaseClient};
 use crate::model::{ExchangeOps,Balance,Price};
 use crate::cmc::{CMCClient, CMCListingResponse, CMCListing};
 use crate::airtable::{AirtableClient,AirtableConfig};
@@ -43,8 +45,12 @@ const USD_FORMAT_MULTIPLIER: f64 = 100.0;
 // this crate will `use errors::*;` to get access to everything
 // `error_chain!` creates.
 pub mod errors {
-    // Create the Error, ErrorKind, ResultExt, and Result types
-    error_chain!{}
+    error_chain! {
+        foreign_links {
+            Reqwest(::reqwest::Error);
+            ParseError(::std::num::ParseFloatError);
+        }
+    }
 }
 
 // This only gives access within this module. Make this `pub use errors::*;`
@@ -125,30 +131,30 @@ fn run() -> Result<()> {
     } else {
         None
     };
-    let binance_clients = get_binance_clients(&config.binance);
-    if binance_clients.len() == 0 {
-        bail!("You must provide at least one pair of binance credentials.");
+    let account_clients = get_account_clients(&config.account);
+    if account_clients.len() == 0 {
+        bail!("You must provide at least one pair of binance credentials. {}", config.account.len());
     }
-    let binance_read_client = binance_clients.first().unwrap();
+    let binance_read_client = account_clients.first().unwrap();
     let cmc = CMCClient::new(cmc_key);
     if let Some(_matches) = matches.subcommand_matches("account") {
         let prices = cmc.latest_listings(100);
         let balances = if let Some(accounts_to_list) = _matches.values_of("name") {
-            let mut valid_clients: Vec<BinanceClient> = Vec::new();
+            let mut valid_clients: Vec<Box<ExchangeOps>> = Vec::new();
             let mut acct_set: HashSet<&str> = HashSet::new();
             for acct_to_list in accounts_to_list {
                 acct_set.insert(acct_to_list);
             }
-            for client in binance_clients {
-                if acct_set.contains(&client.name) {
+            for client in account_clients {
+                if acct_set.contains((*client).name()) {
                     valid_clients.push(client);
                 }
             }
             // let vec_of_accounts: Vec<&str> = accounts_to_list.collect();
-            // let valid_clients: Vec<BinanceClient> = binance_clients.iter().filter(|c| vec_of_accounts.contains(&c.name)).collect();
-            get_all_accounts(&valid_clients)
+            // let valid_clients: Vec<BinanceClient> = account_clients.iter().filter(|c| vec_of_accounts.contains(&c.name)).collect();
+            get_all_accounts(valid_clients)
         } else {
-            get_all_accounts(&binance_clients)
+            get_all_accounts(account_clients)
         };
         match make_account(&balances, &prices) {
             Ok(acct) => {
@@ -159,13 +165,13 @@ fn run() -> Result<()> {
         }
     } else if let Some(_matches) = matches.subcommand_matches("save") {
         let prices = cmc.latest_listings(100);
-        for binance in &binance_clients {
-            match binance.all_balances() {
+        for account_client in &account_clients {
+            match account_client.all_balances() {
                 Ok(balances) => {
                     match make_account(&balances, &prices) {
                         Ok(account) => {
                             if let Some(a_t) = &airtable {
-                                save_account(&a_t, &account, &binance.name);
+                                save_account(&a_t, &account, (*account_client).name());
                             } else {
                                 println!("Could not find airtable credentials in ~/.coin.yaml");
                             }
@@ -176,7 +182,7 @@ fn run() -> Result<()> {
                 Err(e) => bail!(e)
             }
         }
-        let all_balances = get_all_accounts(&binance_clients);
+        let all_balances = get_all_accounts(account_clients);
         match make_account(&all_balances, &prices) {
             Ok(account) => {
                 if let Some(a_t) = &airtable {
@@ -190,7 +196,7 @@ fn run() -> Result<()> {
         Ok(())
     } else if let Some(_matches) = matches.subcommand_matches("symbols") {
         let base_currency = _matches.value_of("base").unwrap_or("BTC").to_ascii_uppercase();
-        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, &binance_read_client, &cmc);
+        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, binance_read_client, &cmc);
         println!("Tradable symbols: {:?}", tradable_symbols);
         Ok(())
     } else if let Some(_matches) = matches.subcommand_matches("cmc") {
@@ -221,10 +227,10 @@ fn run() -> Result<()> {
         let factor_i: f64 = factor.parse().unwrap();
         let is_mock = _matches.is_present("mock");
         // Find all pairs that trade with the base pai
-        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, &binance_read_client, &cmc)?;
+        let tradable_symbols = get_tradeable_symbols(&base_currency, &blacklisted_symbols, binance_read_client, &cmc)?;
         // First exit the market to the base currency.
-        for trading_client in &binance_clients {
-            if trading_client.readonly {
+        for trading_client in &account_clients {
+            if !trading_client.can_trade() {
                 continue;
             }
             if !is_mock {
@@ -245,7 +251,7 @@ fn run() -> Result<()> {
                             if let Ok(balances) = trading_client.all_balances() {
                                 // let account = make_account(&balances, cmc_prices);
                                 if let Ok(account) = make_account(&balances, &cmc_prices) {
-                                    save_account(&a_t, &account, trading_client.key)
+                                    save_account(&a_t, &account, trading_client.name())
                                 }
                             } else {
                                 println!("Error saving to airtable");
@@ -253,7 +259,7 @@ fn run() -> Result<()> {
                         }
                         println!("Successfully entered new positions with order_ids: [{}]", order_ids_str.join(", ").blue());
                     },
-                    Err(e) => println!("Failed to enter market for account {}\n{:?}", trading_client.key.red(), e)
+                    Err(e) => println!("Failed to enter market for account {}\n{:?}", trading_client.name().red(), e)
                 }
             }
         }
@@ -275,7 +281,7 @@ fn run() -> Result<()> {
         };
         let asset_to_buy_with = _matches.value_of("with").unwrap_or("BTC").to_uppercase();
         let account_to_buy_with = _matches.value_of("name").unwrap();
-        if let Some(trading_client) = &binance_clients.iter().find(|i| i.name == account_to_buy_with) {
+        if let Some(trading_client) = &account_clients.iter().find(|i| (*i).name() == account_to_buy_with) {
             match trading_client.market_buy(asset_to_buy, asset_to_buy_with, amount_to_buy) {
                 Ok(order) => {
                     println!("Successfully bought {:?}", order);
@@ -286,6 +292,11 @@ fn run() -> Result<()> {
         } else {
             Ok(())
         }
+    } else if let Some(_matches) = matches.subcommand_matches("coinbase") {
+        if let Some(coinbase_client) = account_clients.iter().find(|i| (*i).name() == "coinbase") {
+            coinbase_client.all_balances();
+        }
+        Ok(())
     } else {
         bail!("Unknown command")
     }
@@ -294,17 +305,18 @@ fn run() -> Result<()> {
 #[derive(Deserialize, Serialize, Debug)]
 struct Config {
     pub blacklist: Option<Vec<String>>,
-    pub binance: Vec<BinanceConfig>,
+    pub account: Vec<AccountConfig>,
     pub cmc: CMCConfig,
     pub airtable: Option<AirtableConfig>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-struct BinanceConfig {
+struct AccountConfig {
     pub name: Option<String>,
     pub key: String,
     pub secret: String,
-    pub readonly: Option<bool>
+    pub readonly: Option<bool>,
+    pub service: String
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -334,17 +346,21 @@ fn get_config() -> Result<Config> {
     }
 }
 
-fn get_binance_clients(configs: &Vec<BinanceConfig>) -> Vec<BinanceClient> {
-    let mut vec_of_clients: Vec<BinanceClient> = Vec::new();
+fn get_account_clients(configs: &Vec<AccountConfig>) -> Vec<Box<ExchangeOps>> {
+    let mut vec_of_clients: Vec<Box<ExchangeOps>> = Vec::new();
     for config in configs {
         let is_read_only = config.readonly.unwrap_or(false);
-        let name: &str = config.name.as_ref().map_or(&config.key, |i| i);
-        vec_of_clients.push(BinanceClient::new(&config.key, &config.secret, name, is_read_only));
+        let name: String = config.name.as_ref().map_or(&config.key, |i| i).to_owned();
+        match &config.service[..] {
+            "binance" => vec_of_clients.push(Box::new(BinanceClient::new(config.key.to_owned(), config.secret.to_owned(), name, is_read_only))),
+            "coinbase" => vec_of_clients.push(Box::new(CoinbaseClient::new(config.key.to_owned(), config.secret.to_owned(), name, is_read_only))),
+            _ => continue
+        }
     }
     vec_of_clients
 }
 
-fn get_all_accounts(clients: &Vec<BinanceClient>) -> Vec<Balance> {
+fn get_all_accounts(clients: Vec<Box<ExchangeOps>>) -> Vec<Balance> {
     // let all_balances: Vec<Balance> = Vec::new();
     let mut all_balances: HashMap<String, Balance> = HashMap::new();
     for client in clients {
@@ -366,14 +382,14 @@ fn get_all_accounts(clients: &Vec<BinanceClient>) -> Vec<Balance> {
                 }
             }
         } else {
-            println!("Could not fetch balances for account: {}", client.key);
+            println!("Could not fetch balances for account: {}", client.name());
         }
     }
     all_balances.iter().map(|(_, val)| val.clone()).collect::<Vec<Balance>>()
 }
 
-fn get_tradeable_symbols(base_currency: &str, blacklist: &HashSet<String>, binance: &BinanceClient, cmc: &CMCClient) -> Result<HashSet<String>> {
-    match binance.all_prices() {
+fn get_tradeable_symbols(base_currency: &str, blacklist: &HashSet<String>, account: &Box<ExchangeOps>, cmc: &CMCClient) -> Result<HashSet<String>> {
+    match (*account).all_prices() {
         Ok(prices) => {
             let mut tradable_symbols: HashSet<_> = prices
                 .iter()
@@ -516,6 +532,10 @@ fn matches() -> clap::ArgMatches<'static> {
         )
         (@subcommand cmc =>
             (about: "List current prices from CoinMarketCap")
+            (version: "1.0")
+        )
+        (@subcommand coinbase =>
+            (about: "List current prices from Coinbase")
             (version: "1.0")
         )
         (@subcommand save =>

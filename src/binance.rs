@@ -7,17 +7,26 @@ use crate::errors::*;
 
 use crate::model::{ExchangeOps,Balance,Price,Order};
 
-pub struct BinanceClient<'a> {
-  pub name: &'a str,
-  pub key: &'a str,
-  pub secret: &'a str,
+pub struct BinanceClient {
+  pub name: String,
+  pub key: String,
+  pub secret: String,
   pub readonly: bool,
   pub account: Account,
   pub market: Market,
   rounding: HashMap<String, i32>,
 }
 
-impl<'a> ExchangeOps for BinanceClient<'a> {
+impl ExchangeOps for BinanceClient {
+
+  fn name(&self) -> &str {
+    &self.name[..]
+  }
+
+  fn can_trade(&self) -> bool {
+    return !self.readonly
+  }
+
   fn all_balances(&self) -> Result<Vec<Balance>> {
     let balances = match self.account.get_account() {
       Ok(answer) => answer.balances,
@@ -115,19 +124,19 @@ impl<'a> ExchangeOps for BinanceClient<'a> {
     }
   }
 
-  /**
-   * Sell all owned quantity of a single currency into a base currency.
-   */
-  fn market_sell_all(&self, sell_out_of: String, sell_in_to: String) -> Result<Order> {
-    let sell_out_of_u = sell_out_of.to_uppercase();
-    let sell_out_of_u_ptr = &sell_out_of_u[..];
-    let balance = match self.account.get_balance(sell_out_of_u_ptr) {
-      Ok(answer) => answer.free,
-      Err(e) => bail!("Could not get_balance for symbol: {}\n{}", sell_out_of_u_ptr, e)
-    };
-    let balance_to_sell: f64 = balance.parse().unwrap();
-    self.market_sell(sell_out_of, sell_in_to, balance_to_sell)
-  }
+  // /**
+  //  * Sell all owned quantity of a single currency into a base currency.
+  //  */
+  // fn market_sell_all(&self, sell_out_of: String, sell_in_to: String) -> Result<Order> {
+  //   let sell_out_of_u = sell_out_of.to_uppercase();
+  //   let sell_out_of_u_ptr = &sell_out_of_u[..];
+  //   let balance = match self.account.get_balance(sell_out_of_u_ptr) {
+  //     Ok(answer) => answer.free,
+  //     Err(e) => bail!("Could not get_balance for symbol: {}\n{}", sell_out_of_u_ptr, e)
+  //   };
+  //   let balance_to_sell: f64 = balance.parse().unwrap();
+  //   self.market_sell(sell_out_of, sell_in_to, balance_to_sell)
+  // }
 
   /**
    * Exit all holdings into some base currency.
@@ -188,8 +197,8 @@ impl<'a> ExchangeOps for BinanceClient<'a> {
   }
 }
 
-impl<'a> BinanceClient<'a> {
-  pub fn new(key: &'a str, secret: &'a str, name: &'a str, readonly: bool) -> Self {
+impl BinanceClient {
+  pub fn new(key: String, secret: String, name: String, readonly: bool) -> Self {
     let account = Binance::new(Some(key.to_owned()), Some(secret.to_owned()));
     let market: Market = Binance::new(None, None);
     BinanceClient {

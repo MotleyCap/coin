@@ -2,13 +2,14 @@ use std::collections::{HashMap};
 use crate::errors::*;
 
 pub trait ExchangeOps {
+  fn name(&self) -> &str;
+  fn can_trade(&self) -> bool;
   fn all_balances(&self) -> Result<Vec<Balance>>;
   fn get_balance(&self, symbol: String) -> Result<f64>;
   fn all_prices(&self) -> Result<Vec<Price>>;
   fn get_price(&self, symbol: &str) -> Result<f64>;
   fn market_buy(&self, buy_into: String, buy_with: String, quantity_to_sell: f64) -> Result<Order>;
   fn market_sell(&self, sell_out_of: String, sell_in_to: String, quantity_to_sell: f64) -> Result<Order>;
-  fn market_sell_all(&self, sell_out_of: String, sell_in_to: String) -> Result<Order>;
   fn exit_market(&self, exit_into: String) -> Result<Vec<Order>>;
   fn enter_market(&self, enter_with: String, portfolio: &HashMap<String, f64>) -> Result<Vec<Order>>;
 }
