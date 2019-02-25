@@ -13,10 +13,12 @@ mod cmc;
 mod model;
 mod binance;
 mod coinbase;
+mod coinbasepro;
 mod airtable;
 
 use crate::binance::{BinanceClient};
 use crate::coinbase::{CoinbaseClient};
+use crate::coinbasepro::{CoinbaseProClient};
 use crate::model::{ExchangeOps,Balance,Price};
 use crate::cmc::{CMCClient, CMCListingResponse, CMCListing};
 use crate::airtable::{AirtableClient,AirtableConfig};
@@ -131,7 +133,7 @@ fn run() -> Result<()> {
     } else {
         None
     };
-    let account_clients = get_account_clients(&config.account);
+    let account_clients = get_account_clients(&config.account)?;
     if account_clients.len() == 0 {
         bail!("You must provide at least one pair of binance credentials. {}", config.account.len());
     }
@@ -315,6 +317,7 @@ struct AccountConfig {
     pub name: Option<String>,
     pub key: String,
     pub secret: String,
+    pub passphrase: Option<String>,
     pub readonly: Option<bool>,
     pub service: String
 }
@@ -346,7 +349,7 @@ fn get_config() -> Result<Config> {
     }
 }
 
-fn get_account_clients(configs: &Vec<AccountConfig>) -> Vec<Box<ExchangeOps>> {
+fn get_account_clients(configs: &Vec<AccountConfig>) -> Result<Vec<Box<ExchangeOps>>> {
     let mut vec_of_clients: Vec<Box<ExchangeOps>> = Vec::new();
     for config in configs {
         let is_read_only = config.readonly.unwrap_or(false);
@@ -354,10 +357,17 @@ fn get_account_clients(configs: &Vec<AccountConfig>) -> Vec<Box<ExchangeOps>> {
         match &config.service[..] {
             "binance" => vec_of_clients.push(Box::new(BinanceClient::new(config.key.to_owned(), config.secret.to_owned(), name, is_read_only))),
             "coinbase" => vec_of_clients.push(Box::new(CoinbaseClient::new(config.key.to_owned(), config.secret.to_owned(), name, is_read_only))),
+            "coinbasepro" => {
+                if let Some(passphrase) = &config.passphrase {
+                    vec_of_clients.push(Box::new(CoinbaseProClient::new(config.key.to_owned(), config.secret.to_owned(), passphrase.to_owned(), name, is_read_only)));
+                } else {
+                    bail!("Coinbase Pro accounts must have a passphrase.")
+                }
+            },
             _ => continue
         }
     }
-    vec_of_clients
+    Ok(vec_of_clients)
 }
 
 fn get_all_accounts(clients: Vec<Box<ExchangeOps>>) -> Vec<Balance> {

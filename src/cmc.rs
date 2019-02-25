@@ -43,6 +43,35 @@ pub struct CMCListingResponse {
   pub data: Vec<CMCListing>,
   pub status: CMCStatus,
 }
+impl CMCListingResponse {
+  pub fn fill_usd(mut self) -> Self {
+    let mut quote_map = HashMap::new();
+    quote_map.insert("USD".to_owned(), CMCQuote {
+      price: 1.0,
+      volume_24h: 0.0,
+      percent_change_1h: 0.0,
+      percent_change_24h: 0.0,
+      percent_change_7d: 0.0,
+      market_cap: 0.0,
+      last_updated: None,
+    });
+    self.data.push(CMCListing {
+      id: 99999,
+      name: "USD".to_owned(),
+      symbol: "USD".to_owned(),
+      slug: "USD".to_owned(),
+      cmc_rank: 99999,
+      num_market_pairs: 1,
+      circulating_supply: None,
+      total_supply: None,
+      max_supply: None,
+      last_updated: None,
+      date_added: None,
+      quote: quote_map,
+    });
+    self
+  }
+}
 #[derive(Deserialize)]
 pub struct CMCHistoricalQuote {
   pub timestamp: String,
@@ -94,7 +123,7 @@ impl CMCClient {
         }
       },
     };
-    body
+    body.fill_usd()
   }
 
   pub fn historic_quotes(&self, symbol: &str, count: u64, _interval: &str) -> CMCHistoricalQuotesResponse {
