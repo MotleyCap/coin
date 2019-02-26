@@ -5,7 +5,7 @@ use binance::market::{Market};
 use binance::model::{Prices};
 use crate::errors::*;
 
-use crate::model::{ExchangeOps,Balance,Price,Order};
+use crate::model::{ExchangeOps,Account as CommonAccount,Price,Order};
 
 pub struct BinanceClient {
   pub name: String,
@@ -27,25 +27,33 @@ impl ExchangeOps for BinanceClient {
     return !self.readonly
   }
 
-  fn all_balances(&self) -> Result<Vec<Balance>> {
+  fn all_accounts(&self) -> Result<Vec<CommonAccount>> {
     let balances = match self.account.get_account() {
       Ok(answer) => answer.balances,
       Err(e) => bail!("Error fetching balances: {}", e),
     };
     let coerced = balances
       .iter()
-      .map(|bal| Balance { free: bal.free.parse().unwrap(), symbol: bal.asset.to_owned(), locked: bal.locked.parse().unwrap() })
-      .collect::<Vec<Balance>>();
+      .map(|bal| CommonAccount {
+        asset: bal.asset.to_owned(),
+        available: bal.free.parse().unwrap(),
+        locked: bal.locked.parse().unwrap()
+      })
+      .collect::<Vec<CommonAccount>>();
     Ok(coerced)
   }
 
   /**
    * Returns the current holdings for a given symbol as a f64.
    */
-  fn get_balance(&self, symbol: String) -> Result<f64> {
+  fn get_account(&self, symbol: String) -> Result<CommonAccount> {
     match self.account.get_balance(symbol.to_uppercase()) {
       Err(_) => bail!("Error getting balance for symbol {}", symbol),
-      Ok(answer) => answer.free.parse().chain_err(|| format!("Error parsing free balance for symbol {}", symbol))
+      Ok(answer) => Ok(CommonAccount {
+        asset: symbol,
+        available: answer.free.parse()?,
+        locked: answer.locked.parse()?,
+      })
     }
   }
 

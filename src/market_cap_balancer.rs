@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::f64::consts::{E};
 
 /**
- * The Portfolio is responsible for calculating how much should
+ * The MarketCapBalancer is responsible for calculating how much should
  * be allotted to each currency in the index.
  */
-pub struct Portfolio {
+pub struct MarketCapBalancer {
   // A map of symbol -> vec of market cap values for that symbol.
   // There is one number per day for as many days as should be included
   // in the exponential moving average calculation.
@@ -16,10 +16,10 @@ pub struct Portfolio {
   alpha: f64,
 }
 
-impl Portfolio {
+impl MarketCapBalancer {
 
   pub fn new(caps: HashMap<String, Vec<f64>>, alpha: f64) -> Self {
-    Portfolio {
+    MarketCapBalancer {
       market_caps: caps,
       alpha: alpha
     }

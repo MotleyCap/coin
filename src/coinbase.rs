@@ -6,7 +6,7 @@ use hex;
 use std::time::SystemTime;
 use crate::errors::*;
 
-use crate::model::{ExchangeOps,Balance,Price,Order};
+use crate::model::{ExchangeOps,Account,Price,Order};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -58,7 +58,7 @@ impl ExchangeOps for CoinbaseClient {
     return !self.readonly
   }
 
-  fn all_balances(&self) -> Result<Vec<Balance>> {
+  fn all_accounts(&self) -> Result<Vec<Account>> {
     let results = self.get("/v2/accounts");
     let coinbase_accounts: CoinbasePaginatedResource<CoinbaseAccount> = match results?.json() {
       Ok(o) => o,
@@ -68,41 +68,41 @@ impl ExchangeOps for CoinbaseClient {
       }
     };
     // Accumulate by ticker as there can be multiple account types.
-    let mut currency_map: HashMap<String, Balance> = HashMap::new();
+    let mut currency_map: HashMap<String, Account> = HashMap::new();
     for account in coinbase_accounts.data {
       if let Some(val) = currency_map.get(&account.currency.code) {
         let account_value: f64 = account.balance.amount.parse()?;
         let updated_balance = if account._type == CoinbaseAccountType::Vault {
-          Balance {
-            symbol: account.currency.code.to_owned(),
-            free: val.free,
+          Account {
+            asset: account.currency.code.to_owned(),
+            available: val.available,
             locked: val.locked + account_value
           }
         } else {
-          Balance {
-            symbol: account.currency.code.to_owned(),
-            free: val.free + account_value,
+          Account {
+            asset: account.currency.code.to_owned(),
+            available: val.available + account_value,
             locked: val.locked
           }
         };
         currency_map.insert(account.currency.code.to_owned(), updated_balance);
       } else {
         let account_value: f64 = account.balance.amount.parse()?;
-        currency_map.insert(account.currency.code.to_owned(), Balance {
-          symbol: account.currency.code.to_owned(),
-          free: account_value,
+        currency_map.insert(account.currency.code.to_owned(), Account {
+          asset: account.currency.code.to_owned(),
+          available: account_value,
           locked: 0.0
         });
       }
     }
-    let balances: Vec<Balance> = currency_map.into_iter().map(|(_,v)| v).collect();
+    let balances: Vec<Account> = currency_map.into_iter().map(|(_,v)| v).collect();
     Ok(balances)
   }
 
   /**
    * Returns the current holdings for a given symbol as a f64.
    */
-  fn get_balance(&self, symbol: String) -> Result<f64> {
+  fn get_account(&self, asset: String) -> Result<Account> {
     bail!("Unimplemented")
   }
 
@@ -116,7 +116,7 @@ impl ExchangeOps for CoinbaseClient {
   /**
    * Get a single price by symbol.
    */
-  fn get_price(&self, symbol: &str) -> Result<f64> {
+  fn get_price(&self, asset: &str) -> Result<f64> {
     bail!("Unimplemented")
   }
 

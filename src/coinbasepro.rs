@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use crate::errors::*;
 use coinbase_pro_rs::{Private, Sync, MAIN_URL};
 
-use crate::model::{ExchangeOps,Balance,Price,Order};
+use crate::model::{ExchangeOps,Account,Price,Order};
 
 pub struct CoinbaseProClient {
   pub name: String,
@@ -24,12 +24,12 @@ impl ExchangeOps for CoinbaseProClient {
     return !self.readonly
   }
 
-  fn all_balances(&self) -> Result<Vec<Balance>> {
+  fn all_accounts(&self) -> Result<Vec<Account>> {
     let results = match self.private.get_accounts() {
       Ok(results) => {
-        results.into_iter().map(|a| Balance {
-          symbol: a.currency,
-          free: a.available,
+        results.into_iter().map(|a| Account {
+          asset: a.currency,
+          available: a.available,
           locked: a.hold
         }).collect()
       },
@@ -41,7 +41,7 @@ impl ExchangeOps for CoinbaseProClient {
   /**
    * Returns the current holdings for a given symbol as a f64.
    */
-  fn get_balance(&self, symbol: String) -> Result<f64> {
+  fn get_account(&self, symbol: String) -> Result<Account> {
     bail!("Unimplemented")
   }
 
