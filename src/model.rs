@@ -66,6 +66,28 @@ pub struct Order {
 }
 
 /**
+ * A Buy is a transaction that should be included in the measurement of the cost-basis.
+ * When moving a currency between accounts, the cost-bases is transfered.
+ */
+#[derive(Deserialize, Serialize, Debug)]
+pub struct Buy {
+  pub total: Amount,
+  pub amount: Amount,
+  pub fee: Amount,
+  pub subtotal: Amount,
+  pub timestamp: String
+}
+
+/**
+ * An amount of a specified currency
+ */
+#[derive(Deserialize, Serialize, Debug)]
+pub struct Amount {
+  pub amount: f64,
+  pub currency: String
+}
+
+/**
  * A portfolio is a summary of your entire holdings.
  */
 #[derive(Deserialize, Serialize, Debug)]
@@ -84,7 +106,7 @@ impl Portfolio {
 }
 
 /**
- * A portfolio balance contains information for a single balance in the portfolio.
+ * A portfolio balance contains information on the holdings of a single currency.
  */
 #[derive(Deserialize, Serialize, Debug)]
 pub struct PortfolioBalance {

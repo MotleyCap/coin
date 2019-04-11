@@ -6,7 +6,7 @@ use hex;
 use std::time::SystemTime;
 use crate::errors::*;
 
-use crate::model::{ExchangeOps,Account,Price,Order};
+use crate::model::{ExchangeOps,Account,Price,Order,Buy,Amount};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -46,6 +46,35 @@ impl CoinbaseClient {
   pub fn post(&self, uri: &str, body_str: &str) -> CoinbaseResult {
     self.call_api(Method::POST, uri, body_str)
   }
+
+  pub fn list_accounts(&self) -> Result<CoinbasePaginatedResource<CoinbaseAccount>> {
+    let results = self.get("/v2/accounts");
+    let coinbase_accounts: CoinbasePaginatedResource<CoinbaseAccount> = match results?.json() {
+      Ok(o) => o,
+      Err(e) => bail!(Error::with_chain(e, "Error parsing coinbase response"))
+    };
+    Ok(coinbase_accounts)
+  }
+
+  pub fn list_buys(&self) -> Result<Vec<Buy>> {
+    let accounts = self.list_accounts()?;
+    let mut all_buys = vec![];
+    for acct in accounts.data {
+      let mut resp = self.get(&format!("/v2/accounts/{}/buys", acct.id))?;
+      let buys: CoinbasePaginatedResource<CoinbaseBuy> = resp.json()?;
+      for buy in buys.data.iter() {
+        let created = if let Some(d) = &buy.created_at { d.to_string() } else { "Unknown".to_string() };
+        all_buys.push(Buy {
+          amount: Amount { amount: buy.amount.amount.parse()?, currency: buy.amount.currency.to_string() },
+          fee: Amount { amount: buy.fee.amount.parse()?, currency: buy.fee.currency.to_string() },
+          subtotal: Amount { amount: buy.subtotal.amount.parse()?, currency: buy.subtotal.currency.to_string() },
+          total: Amount { amount: buy.total.amount.parse()?, currency: buy.total.currency.to_string() },
+          timestamp: created,
+        });
+      }
+    }
+    Ok(all_buys)
+  }
 }
 
 impl ExchangeOps for CoinbaseClient {
@@ -59,44 +88,18 @@ impl ExchangeOps for CoinbaseClient {
   }
 
   fn all_accounts(&self) -> Result<Vec<Account>> {
-    let results = self.get("/v2/accounts");
-    let coinbase_accounts: CoinbasePaginatedResource<CoinbaseAccount> = match results?.json() {
-      Ok(o) => o,
-      Err(e) => {
-        println!("Error parsing coinbase response {:?}", e);
-        return Err(Error::with_chain(e, "Something happened"));
-      }
-    };
+    let coinbase_accounts = self.list_accounts()?;
+    let mut accounts: Vec<Account> = vec![];
     // Accumulate by ticker as there can be multiple account types.
-    let mut currency_map: HashMap<String, Account> = HashMap::new();
     for account in coinbase_accounts.data {
-      if let Some(val) = currency_map.get(&account.currency.code) {
-        let account_value: f64 = account.balance.amount.parse()?;
-        let updated_balance = if account._type == CoinbaseAccountType::Vault {
-          Account {
-            asset: account.currency.code.to_owned(),
-            available: val.available,
-            locked: val.locked + account_value
-          }
-        } else {
-          Account {
-            asset: account.currency.code.to_owned(),
-            available: val.available + account_value,
-            locked: val.locked
-          }
-        };
-        currency_map.insert(account.currency.code.to_owned(), updated_balance);
-      } else {
-        let account_value: f64 = account.balance.amount.parse()?;
-        currency_map.insert(account.currency.code.to_owned(), Account {
-          asset: account.currency.code.to_owned(),
-          available: account_value,
-          locked: 0.0
-        });
-      }
+      let account_value: f64 = account.balance.amount.parse()?;
+      accounts.push(Account {
+        asset: account.currency.code.to_owned(),
+        available: account_value,
+        locked: 0.0
+      })
     }
-    let balances: Vec<Account> = currency_map.into_iter().map(|(_,v)| v).collect();
-    Ok(balances)
+    Ok(accounts)
   }
 
   /**
@@ -174,11 +177,11 @@ pub struct CoinbaseAccount {
     #[serde(rename = "type")]
     _type: CoinbaseAccountType,
     currency: CoinbaseAccountCurrency,
-    balance: CoinbaseAccountBalance,
-    created_at: String,
-    updated_at: String,
-    resource: String,
-    resource_path: String,
+    balance: CoinbaseAmount,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    resource: Option<String>,
+    resource_path: Option<String>,
     allow_deposits: bool,
     allow_withdrawals: bool
 }
@@ -197,26 +200,53 @@ pub enum CoinbaseAccountType {
 pub struct CoinbaseAccountCurrency {
   code: String,
   name: String,
-  color: String,
+  color: Option<String>,
   sort_index: u64,
   exponent: u64,
   #[serde(rename = "type")]
-  _type: String,
+  _type: Option<String>,
   address_regex: Option<String>,
   asset_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct CoinbaseAccountBalance {
+pub struct CoinbaseAmount {
     amount: String,
     currency: String
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CoinbaseBuy {
+  id: String,
+  status: String,
+  primary: Option<bool>,
+  payment_method: CoinbaseReference,
+  transaction: CoinbaseReference,
+  amount: CoinbaseAmount,
+  total: CoinbaseAmount,
+  subtotal: CoinbaseAmount,
+  created_at: Option<String>,
+  updated_at: Option<String>,
+  resource: Option<String>,
+  resource_path: Option<String>,
+  committed: bool,
+  instant: bool,
+  fee: CoinbaseAmount,
+  payout_at: Option<String>
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CoinbaseReference {
+  id: String,
+  resource: String,
+  resource_path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CoinbasePagination {
   ending_before: Option<String>,
   starting_after: Option<String>,
-  order: String,
+  order: Option<String>,
   limit: u64,
   previous_uri: Option<String>,
   next_uri: Option<String>

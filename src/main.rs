@@ -371,6 +371,17 @@ fn run() -> Result<()> {
             println!("Processing args {:?}", args);
         }
         Ok(())
+    } else if let Some(_matches) = matches.subcommand_matches("cost") {
+        let client = CoinbaseClient::new(
+            "yeWEa818KVm8MUhw".to_owned(),
+            "16R1zffQjMuziEqjZiPedEwzhuhlPSJm".to_owned(),
+            "cb".to_owned(),
+            true,
+        );
+        let buys = client.list_buys()?;
+        let sum = buys.iter().fold(0f64, |acc, buy| acc + buy.total.amount);
+        println!("Cost basis {}", sum);
+        Ok(())
     } else {
         bail!("Unknown command")
     }
@@ -702,6 +713,10 @@ fn matches() -> clap::ArgMatches<'static> {
             (@arg amount: -a --amount +takes_value "Specify how much should be spent in terms of the base currency. Use the string all to buy as much ETH as possible.")
             (@arg with: -w --with +takes_value "Specify which currency you would like to use to buy the asset. Defaults to BTC.")
         )
+        (@subcommand cost =>
+            (about: "Compute cost basis")
+            (version: "1.0")
+        )
         (@subcommand watch =>
             (about: "Start a daemon that will periodically")
             (version: "1.0")
@@ -721,7 +736,7 @@ fn matches() -> clap::ArgMatches<'static> {
     ).get_matches();
     matches
 }
-fn make_portfolio(balances: &Vec<Account>, prices: &CMCListingResponse) -> Result<Portfolio> {
+fn make_portfolio(accounts: &Vec<Account>, prices: &CMCListingResponse) -> Result<Portfolio> {
     let price_map = cmc_listings_as_map(prices);
     let price_btc = match price_map.get("BTC") {
         Some(price) => match price.quote.get("USD") {
@@ -733,7 +748,8 @@ fn make_portfolio(balances: &Vec<Account>, prices: &CMCListingResponse) -> Resul
     let mut total_usd = 0.0;
     let mut total_btc = 0.0;
     let mut acct_balances: Vec<PortfolioBalance> = Vec::new();
-    balances.iter().for_each(|item| {
+    let flat_accounts = summarize_accounts(accounts);
+    flat_accounts.iter().for_each(|item| {
         let increase_7d = match price_map.get(&item.asset) {
             Some(price) => match price.quote.get("USD") {
                 Some(quote) => quote.percent_change_7d,
@@ -791,6 +807,28 @@ fn make_portfolio(balances: &Vec<Account>, prices: &CMCListingResponse) -> Resul
         total_btc: total_btc,
         total_usd: total_usd,
     })
+}
+
+fn summarize_accounts(accounts: &Vec<Account>) -> Vec<Account> {
+    let mut asset_map: HashMap<String, Account> = HashMap::new();
+    for account in accounts {
+      if let Some(val) = asset_map.get(&account.asset) {
+        let updated_balance = Account {
+            asset: account.asset.to_string(),
+            available: val.available + account.available,
+            locked: val.locked + account.locked
+        };
+        asset_map.insert(account.asset.to_string(), updated_balance);
+      } else {
+        asset_map.insert(account.asset.to_string(), Account {
+            asset: account.asset.to_string(),
+            available: account.available,
+            locked: account.locked
+        });
+      }
+    }
+    let balances: Vec<Account> = asset_map.into_iter().map(|(_,v)| v).collect();
+    balances
 }
 
 fn print_portfolio(account: &Portfolio) {
