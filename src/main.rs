@@ -373,8 +373,8 @@ fn run() -> Result<()> {
         Ok(())
     } else if let Some(_matches) = matches.subcommand_matches("cost") {
         let client = CoinbaseClient::new(
-            "yeWEa818KVm8MUhw".to_owned(),
-            "16R1zffQjMuziEqjZiPedEwzhuhlPSJm".to_owned(),
+            "xxxxxxx".to_owned(),
+            "xxxxxxx".to_owned(),
             "cb".to_owned(),
             true,
         );
