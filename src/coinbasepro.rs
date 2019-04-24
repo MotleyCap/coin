@@ -1,5 +1,4 @@
 use std::collections::{HashMap};
-use std::time::SystemTime;
 use crate::errors::*;
 use coinbase_pro_rs::{Private, Sync, MAIN_URL};
 

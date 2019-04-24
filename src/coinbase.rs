@@ -1,11 +1,11 @@
-use reqwest::{Client,Method};
+use reqwest::{Client};
 use std::collections::{HashMap};
 use sha2::{Sha256};
 use hmac::{Hmac,Mac};
-use hex;
-use std::time::SystemTime;
+use coinbase::api::{Coinbase};
+use coinbase::account::{Account as CBAccount};
+use coinbase::model::*;
 use crate::errors::*;
-
 use crate::model::{ExchangeOps,Account,Price,Order,Buy,Amount};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -20,48 +20,13 @@ pub struct CoinbaseClient {
 
 type CoinbaseResult = reqwest::Result<reqwest::Response>;
 impl CoinbaseClient {
-  const BASE_URI: &'static str = "https://api.coinbase.com";
-  pub fn sign(secret: &str, timestamp: u64, method: Method, uri: &str, body_str: &str) -> String {
-        let mut mac: Hmac<sha2::Sha256> = Hmac::new_varkey(&secret.as_bytes()).expect("Hmac::new(key)");
-        mac.input((timestamp.to_string() + method.as_str() + uri + body_str).as_bytes());
-        hex::encode(&mac.result().code())
-  }
 
-  fn call_api(&self, method: Method, uri: &str, body_str: &str) -> CoinbaseResult {
-    let since_epoch_seconds = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).expect("Invalid SystemTime.").as_secs();
-    let signature = Self::sign(&self.secret, since_epoch_seconds, method, uri, body_str);
-    let url = format!("{}{}", Self::BASE_URI, uri);
-    self.client.get(&url)
-        .header("CB-ACCESS-KEY", self.key.to_owned())
-        .header("CB-ACCESS-SIGN", signature)
-        .header("CB-ACCESS-TIMESTAMP", since_epoch_seconds.to_string())
-        .header("CB-Version", "2019-02-25")
-        .send()
-  }
-
-  pub fn get(&self, uri: &str) -> CoinbaseResult {
-    self.call_api(Method::GET, uri, "")
-  }
-
-  pub fn post(&self, uri: &str, body_str: &str) -> CoinbaseResult {
-    self.call_api(Method::POST, uri, body_str)
-  }
-
-  pub fn list_accounts(&self) -> Result<CoinbasePaginatedResource<CoinbaseAccount>> {
-    let results = self.get("/v2/accounts");
-    let coinbase_accounts: CoinbasePaginatedResource<CoinbaseAccount> = match results?.json() {
-      Ok(o) => o,
-      Err(e) => bail!(Error::with_chain(e, "Error parsing coinbase response"))
-    };
-    Ok(coinbase_accounts)
-  }
-
-  pub fn list_buys(&self) -> Result<Vec<Buy>> {
-    let accounts = self.list_accounts()?;
+  pub fn list_all_buys(&self) -> Result<Vec<Buy>> {
+    let cb: CBAccount = Coinbase::new(Some(self.key.to_string()), Some(self.secret.to_string()));
+    let accounts = cb.list_accounts()?;
     let mut all_buys = vec![];
     for acct in accounts.data {
-      let mut resp = self.get(&format!("/v2/accounts/{}/buys", acct.id))?;
-      let buys: CoinbasePaginatedResource<CoinbaseBuy> = resp.json()?;
+      let buys: CoinbasePaginatedResource<CoinbaseBuy> = cb.list_buys(&acct.id)?;
       for buy in buys.data.iter() {
         let created = if let Some(d) = &buy.created_at { d.to_string() } else { "Unknown".to_string() };
         all_buys.push(Buy {
@@ -88,7 +53,8 @@ impl ExchangeOps for CoinbaseClient {
   }
 
   fn all_accounts(&self) -> Result<Vec<Account>> {
-    let coinbase_accounts = self.list_accounts()?;
+    let cb: CBAccount = Coinbase::new(Some(self.key.to_string()), Some(self.secret.to_string()));
+    let coinbase_accounts = cb.list_accounts()?;
     let mut accounts: Vec<Account> = vec![];
     // Accumulate by ticker as there can be multiple account types.
     for account in coinbase_accounts.data {
@@ -167,92 +133,4 @@ impl CoinbaseClient {
       client: Client::new()
     }
   }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CoinbaseAccount {
-    id: String,
-    name: String,
-    primary: bool,
-    #[serde(rename = "type")]
-    _type: CoinbaseAccountType,
-    currency: CoinbaseAccountCurrency,
-    balance: CoinbaseAmount,
-    created_at: Option<String>,
-    updated_at: Option<String>,
-    resource: Option<String>,
-    resource_path: Option<String>,
-    allow_deposits: bool,
-    allow_withdrawals: bool
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, PartialOrd)]
-pub enum CoinbaseAccountType {
-  #[serde(rename = "wallet")]
-  Wallet,
-  #[serde(rename = "fiat")]
-  Fiat,
-  #[serde(rename = "vault")]
-  Vault
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CoinbaseAccountCurrency {
-  code: String,
-  name: String,
-  color: Option<String>,
-  sort_index: u64,
-  exponent: u64,
-  #[serde(rename = "type")]
-  _type: Option<String>,
-  address_regex: Option<String>,
-  asset_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CoinbaseAmount {
-    amount: String,
-    currency: String
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CoinbaseBuy {
-  id: String,
-  status: String,
-  primary: Option<bool>,
-  payment_method: CoinbaseReference,
-  transaction: CoinbaseReference,
-  amount: CoinbaseAmount,
-  total: CoinbaseAmount,
-  subtotal: CoinbaseAmount,
-  created_at: Option<String>,
-  updated_at: Option<String>,
-  resource: Option<String>,
-  resource_path: Option<String>,
-  committed: bool,
-  instant: bool,
-  fee: CoinbaseAmount,
-  payout_at: Option<String>
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CoinbaseReference {
-  id: String,
-  resource: String,
-  resource_path: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CoinbasePagination {
-  ending_before: Option<String>,
-  starting_after: Option<String>,
-  order: Option<String>,
-  limit: u64,
-  previous_uri: Option<String>,
-  next_uri: Option<String>
-}
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CoinbasePaginatedResource<T> {
-  pagination: CoinbasePagination,
-  data: Vec<T>
 }

@@ -48,6 +48,9 @@ extern crate error_chain;
 // `error_chain!` creates.
 pub mod errors {
     error_chain! {
+        links {
+            Coinbase(::coinbase::errors::Error, coinbase::errors::ErrorKind);
+        }
         foreign_links {
             Reqwest(::reqwest::Error);
             ParseError(::std::num::ParseFloatError);
@@ -373,12 +376,12 @@ fn run() -> Result<()> {
         Ok(())
     } else if let Some(_matches) = matches.subcommand_matches("cost") {
         let client = CoinbaseClient::new(
-            "xxxxxxx".to_owned(),
-            "xxxxxxx".to_owned(),
+            "yeWEa818KVm8MUhw".to_owned(),
+            "16R1zffQjMuziEqjZiPedEwzhuhlPSJm".to_owned(),
             "cb".to_owned(),
             true,
         );
-        let buys = client.list_buys()?;
+        let buys = client.list_all_buys()?;
         let sum = buys.iter().fold(0f64, |acc, buy| acc + buy.total.amount);
         println!("Cost basis {}", sum);
         Ok(())
