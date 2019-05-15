@@ -1,0 +1,8 @@
+[package]
+name = "basis"
+version = "0.1.0"
+authors = ["Michael Paris <motleycapital@protonmail.com>"]
+edition = "2018"
+
+[dependencies]
+error-chain = "0.12"
