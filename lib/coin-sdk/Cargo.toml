@@ -1,0 +1,16 @@
+[package]
+name = "coin_sdk"
+version = "0.1.0"
+authors = ["Michael Paris <motleycapital@protonmail.com>"]
+edition = "2018"
+
+[dependencies]
+error-chain = "0.12"
+serde = "1.0"
+serde_json = "1.0"
+serde_derive = "1.0"
+binance = { git = "https://github.com/wisespace-io/binance-rs.git" }
+coinbase = { version = "0.1.0", path = "../coinbase-rs" }
+cmc = { version = "0.1.0", path = "../cmc-rs" }
+airtable = { version = "0.1.0", path = "../airtable-rs" }
+coinbase-pro-rs = "0.3.2"

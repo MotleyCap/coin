@@ -708,33 +708,9 @@ fn matches() -> clap::ArgMatches<'static> {
             (@arg factor: -f --factor +takes_value "Specifies the smoothing factor for the moving average calculation. Defaults to 0.3.")
             (@arg mock: -m --mock "Preview the balance event but do not execute any trades.")
         )
-        (@subcommand buy =>
-            (about: "Buy one asset --with another asset.")
-            (version: "1.0")
-            (@arg name: +takes_value +required "Specify the name of the account in ~/.coin.toml to use to buy the asset.")
-            (@arg asset: +takes_value +required "Specify the symbol of the asset that you would like to buy.")
-            (@arg amount: -a --amount +takes_value "Specify how much should be spent in terms of the base currency. Use the string all to buy as much ETH as possible.")
-            (@arg with: -w --with +takes_value "Specify which currency you would like to use to buy the asset. Defaults to BTC.")
-        )
         (@subcommand cost =>
             (about: "Compute cost basis")
             (version: "1.0")
-        )
-        (@subcommand watch =>
-            (about: "Start a daemon that will periodically")
-            (version: "1.0")
-            (@subcommand start =>
-                (about: "Starts the collector process")
-                (version: "1.0")
-            )
-            (@subcommand kill =>
-                (about: "Starts the collector process")
-                (version: "1.0")
-            )
-            (@subcommand daemon =>
-                (about: "Starts the collector process")
-                (version: "1.0")
-            )
         )
     ).get_matches();
     matches

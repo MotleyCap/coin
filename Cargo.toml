@@ -24,3 +24,4 @@ coinbase-pro-rs = "0.3.2"
 dotenv = "0.13.0"
 coinbase = { version = "0.1.0", path = "./lib/coinbase-rs" }
 basis = { version = "0.1.0", path = "./lib/basis-rs" }
+coin_sdk = { version = "0.1.0", path = "./lib/coin-sdk" }

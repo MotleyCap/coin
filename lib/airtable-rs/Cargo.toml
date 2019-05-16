@@ -1,0 +1,12 @@
+[package]
+name = "airtable"
+version = "0.1.0"
+authors = ["Michael Paris <motleycapital@protonmail.com>"]
+edition = "2018"
+
+[dependencies]
+error-chain = "0.12"
+reqwest = "~0.9.5"
+serde = "1.0"
+serde_json = "1.0"
+serde_derive = "1.0"

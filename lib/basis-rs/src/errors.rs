@@ -4,6 +4,9 @@ error_chain! {
     }
 
     errors {
-        BasisError(msg: String)
+        BasisError(msg: String) {
+            description("BasisError")
+            display("BasisError: '{}'", msg)
+        }
     }
 }
