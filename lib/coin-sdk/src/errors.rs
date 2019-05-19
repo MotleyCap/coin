@@ -9,4 +9,12 @@ error_chain! {
             display("CoinError: '{}'", msg)
         }
     }
+
+    links {
+        Coinbase(::coinbase::errors::Error, coinbase::errors::ErrorKind);
+    }
+
+    foreign_links {
+        ParseError(::std::num::ParseFloatError);
+    }
 }

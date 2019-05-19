@@ -1,5 +1,5 @@
 use std::collections::{HashMap};
-use crate::model::{AccountConfig};
+use crate::model::{AccountConfig, Asset};
 use crate::account::{Account};
 use crate::errors::*;
 use coinbase_pro_rs::{Private, Sync, MAIN_URL};
@@ -23,6 +23,10 @@ impl CoinbaseProAccount {
 }
 impl Account for CoinbaseProAccount {
 
+  fn name(&self) -> &str {
+    &self.config.name
+  }
+
   fn buy(&self) -> Result<()> {
     Ok(())
   }
@@ -31,8 +35,18 @@ impl Account for CoinbaseProAccount {
     Ok(())
   }
 
-  fn list_assets(&self) -> Result<()> {
-    Ok(())
+  fn list_assets(&self) -> Result<Vec<Asset>> {
+    let results = match self.private.get_accounts() {
+      Ok(results) => {
+        results.into_iter().map(|a| Asset {
+          asset: a.currency,
+          available: a.available,
+          locked: a.hold
+        }).collect()
+      },
+      Err(e) => bail!("Error fetching coinbase pro assets {:?}", e)
+    };
+    Ok(results)
   }
 
   fn cost_basis(&self) -> Result<()> {

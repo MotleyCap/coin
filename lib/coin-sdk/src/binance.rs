@@ -3,7 +3,7 @@ use binance::api::*;
 use binance::account::{Account as AccountImpl};
 use binance::market::{Market};
 use binance::model::{Prices};
-use crate::model::{AccountConfig};
+use crate::model::{AccountConfig, Asset};
 use crate::errors::*;
 use crate::account::Account;
 
@@ -29,6 +29,10 @@ impl BinanceAccount {
 
 impl Account for BinanceAccount {
 
+  fn name(&self) -> &str {
+    &self.config.name
+  }
+
   fn buy(&self) -> Result<()> {
     Ok(())
   }
@@ -37,8 +41,20 @@ impl Account for BinanceAccount {
     Ok(())
   }
 
-  fn list_assets(&self) -> Result<()> {
-    Ok(())
+  fn list_assets(&self) -> Result<Vec<Asset>> {
+    let balances = match self.account.get_account() {
+      Ok(answer) => answer.balances,
+      Err(e) => bail!("Error fetching balances: {}", e),
+    };
+    let coerced = balances
+      .iter()
+      .map(|bal| Asset {
+        asset: bal.asset.to_owned(),
+        available: bal.free.parse().unwrap(),
+        locked: bal.locked.parse().unwrap()
+      })
+      .collect::<Vec<Asset>>();
+    Ok(coerced)
   }
 
   fn cost_basis(&self) -> Result<()> {

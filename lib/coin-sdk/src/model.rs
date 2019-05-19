@@ -8,7 +8,7 @@ pub struct CoinConfig {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AccountConfig {
-    pub name: Option<String>,
+    pub name: String,
     pub key: String,
     pub secret: String,
     pub passphrase: Option<String>,
@@ -19,6 +19,25 @@ pub struct AccountConfig {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct CMCConfig {
     pub key: String,
+}
+
+/**
+ * Exchange specific types.
+ */
+/**
+ * An account contains some value of a single asset and is held
+ * by an exchange, by a bank, by a service, or in an offline wallet.
+ */
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Asset {
+  pub asset: String,
+  pub available: f64,
+  pub locked: f64,
+}
+impl Asset {
+  pub fn total(&self) -> f64 {
+    self.available + self.locked
+  }
 }
 
 /**

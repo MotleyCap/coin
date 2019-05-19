@@ -12,6 +12,9 @@ use std::time::Duration;
 use chrono::prelude::*;
 use clap::clap_app;
 
+use coin_sdk::sdk::SDK;
+use coin_sdk::model::{CoinConfig, AccountConfig, CMCConfig, Asset};
+
 mod airtable;
 mod binance;
 mod cmc;
@@ -50,10 +53,12 @@ pub mod errors {
     error_chain! {
         links {
             Coinbase(::coinbase::errors::Error, coinbase::errors::ErrorKind);
+            CoinSDK(::coin_sdk::errors::Error, coin_sdk::errors::ErrorKind);
         }
         foreign_links {
             Reqwest(::reqwest::Error);
             ParseError(::std::num::ParseFloatError);
+            TomlDeError(::toml::de::Error);
         }
     }
 }
@@ -150,26 +155,18 @@ fn run() -> Result<()> {
     }
     let binance_read_client = account_clients.first().unwrap();
     let cmc = CMCClient::new(cmc_key);
-    if let Some(_matches) = matches.subcommand_matches("account") {
+    let coin_config: CoinConfig = get_coin_config()?;
+    let sdk = sdk(coin_config)?;
+    if let Some(_matches) = matches.subcommand_matches("list_assets") {
         let prices = cmc.latest_listings(100);
-        let balances = if let Some(accounts_to_list) = _matches.values_of("name") {
-            let mut valid_clients: Vec<Box<ExchangeOps>> = Vec::new();
-            let mut acct_set: HashSet<&str> = HashSet::new();
-            for acct_to_list in accounts_to_list {
-                acct_set.insert(acct_to_list);
-            }
-            for client in account_clients {
-                if acct_set.contains((*client).name()) {
-                    valid_clients.push(client);
-                }
-            }
-            // let vec_of_accounts: Vec<&str> = accounts_to_list.collect();
-            // let valid_clients: Vec<BinanceClient> = account_clients.iter().filter(|c| vec_of_accounts.contains(&c.name)).collect();
-            get_all_accounts(valid_clients)
+        let assets = if let Some(accounts_to_list) = _matches.values_of("account") {
+            let _accounts_to_list: Vec<String> = accounts_to_list.map(|al| al.to_string()).collect::<Vec<String>>();
+            sdk.list_assets(Some(_accounts_to_list))?
         } else {
-            get_all_accounts(account_clients)
+            sdk.list_assets(None)?
         };
-        match make_portfolio(&balances, &prices) {
+        let accounts = accounts(assets);
+        match make_portfolio(&accounts, &prices) {
             Ok(acct) => {
                 print_portfolio(&acct);
                 Ok(())
@@ -193,8 +190,9 @@ fn run() -> Result<()> {
                 Err(e) => bail!(e),
             }
         }
-        let all_balances = get_all_accounts(account_clients);
-        match make_portfolio(&all_balances, &prices) {
+        let assets = sdk.list_assets(None)?;
+        let accounts = accounts(assets);
+        match make_portfolio(&accounts, &prices) {
             Ok(account) => {
                 if let Some(a_t) = &airtable {
                     save_account(&a_t, &account, "ALL");
@@ -360,8 +358,6 @@ fn run() -> Result<()> {
                 .spawn()
                 .expect("Child process failed to start.");
             println!("child pid: {}", child.id());
-        // let result = child.wait();
-        // println!("Child exited with result {:?}", result);
         } else if let Some(_) = _matches.subcommand_matches("kill") {
             println!("Would try to kill process.");
         } else if let Some(_) = _matches.subcommand_matches("daemon") {
@@ -398,20 +394,6 @@ struct Config {
     pub airtable: Option<AirtableConfig>,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
-struct AccountConfig {
-    pub name: Option<String>,
-    pub key: String,
-    pub secret: String,
-    pub passphrase: Option<String>,
-    pub readonly: Option<bool>,
-    pub service: String,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct CMCConfig {
-    pub key: String,
-}
 fn get_config() -> Result<Config> {
     let coin_file = if let Some(p) = home_dir() {
         match fs::read_to_string(p.join(".coin.toml")) {
@@ -433,11 +415,34 @@ fn get_config() -> Result<Config> {
     }
 }
 
+fn get_coin_config() -> Result<CoinConfig> {
+    let coin_file = if let Some(p) = home_dir() {
+        match fs::read_to_string(p.join(".coin.toml")) {
+            Ok(contents) => Some(contents),
+            _ => bail!("Error reading ~/.coin.toml"),
+        }
+    } else {
+        bail!("Could not find ~/.coin.toml")
+    };
+    let full_config = match &coin_file {
+        Some(contents) => {
+            let conf: Config = toml::from_str(&contents)?;
+            conf
+        }
+        None => bail!("Could not find ~/.coin.toml"),
+    };
+    Ok(CoinConfig {
+        blacklist: full_config.blacklist,
+        account: full_config.account,
+        cmc: full_config.cmc
+    })
+}
+
 fn get_account_clients(configs: &Vec<AccountConfig>) -> Result<Vec<Box<ExchangeOps>>> {
     let mut vec_of_clients: Vec<Box<ExchangeOps>> = Vec::new();
     for config in configs {
         let is_read_only = config.readonly.unwrap_or(false);
-        let name: String = config.name.as_ref().map_or(&config.key, |i| i).to_owned();
+        let name: String = config.name.to_owned();
         match &config.service[..] {
             "binance" => vec_of_clients.push(Box::new(BinanceClient::new(
                 config.key.to_owned(),
@@ -468,37 +473,6 @@ fn get_account_clients(configs: &Vec<AccountConfig>) -> Result<Vec<Box<ExchangeO
         }
     }
     Ok(vec_of_clients)
-}
-
-fn get_all_accounts(clients: Vec<Box<ExchangeOps>>) -> Vec<Account> {
-    // let all_balances: Vec<Account> = Vec::new();
-    let mut all_balances: HashMap<String, Account> = HashMap::new();
-    for client in clients {
-        let client_account = match client.all_accounts() {
-            Ok(balances) => Some(balances),
-            Err(_) => None,
-        };
-        if let Some(account) = client_account {
-            for balance in account {
-                if let Some(existing_balance) = all_balances.get(&balance.asset[..]) {
-                    let new_balance = Account {
-                        available: existing_balance.available + balance.available,
-                        asset: existing_balance.asset.to_owned(),
-                        locked: existing_balance.locked + balance.locked,
-                    };
-                    all_balances.insert(balance.asset.to_owned(), new_balance);
-                } else {
-                    all_balances.insert(balance.asset.to_owned(), balance);
-                }
-            }
-        } else {
-            println!("Could not fetch balances for account: {}", client.name());
-        }
-    }
-    all_balances
-        .iter()
-        .map(|(_, val)| val.clone())
-        .collect::<Vec<Account>>()
 }
 
 fn get_tradeable_symbols(
@@ -668,11 +642,11 @@ fn matches() -> clap::ArgMatches<'static> {
         (about: "A CLI for interacting with Cryptocurrency Exchanges")
         (@arg CONFIG: -c --config +takes_value "Sets a custom config file")
         (@arg debug: -d ... "Sets the level of debugging information")
-        (@subcommand account =>
-            (about: "Show positions and their values")
+        (@subcommand list_assets =>
+            (about: "List portfolio assets. Provide a --name to list assets for a specific account.")
             (version: "1.0")
             (@arg verbose: -v --verbose "Print test information verbosely")
-            (@arg name: -n --name +takes_value +multiple "Specify accounts to list details about.")
+            (@arg account: -a --account +takes_value +multiple "List details for one or more accounts.")
         )
         (@subcommand cmc =>
             (about: "List current prices from CoinMarketCap")
@@ -714,6 +688,20 @@ fn matches() -> clap::ArgMatches<'static> {
         )
     ).get_matches();
     matches
+}
+fn accounts(accts: Vec<Asset>) -> Vec<Account> {
+    let mut assets = vec!();
+    for acct in accts {
+        assets.push(asset(acct));
+    }
+    assets
+}
+fn asset(acct: Asset) -> Account {
+    Account {
+        asset: acct.asset,
+        available: acct.available,
+        locked: acct.locked
+    }
 }
 fn make_portfolio(accounts: &Vec<Account>, prices: &CMCListingResponse) -> Result<Portfolio> {
     let price_map = cmc_listings_as_map(prices);
@@ -852,4 +840,8 @@ fn cmc_listings_as_map<'a>(listing: &'a CMCListingResponse) -> HashMap<String, &
         h_map.insert(l.symbol.to_owned(), l);
     }
     h_map
+}
+
+fn sdk(conf: CoinConfig) -> Result<SDK> {
+    Ok(SDK::new(conf)?)
 }
