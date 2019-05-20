@@ -33,7 +33,7 @@ pub struct CoinbaseAccountCurrency {
   pub sort_index: u64,
   pub exponent: u64,
   #[serde(rename = "type")]
-  pub _type: Option<String>,
+  pub r#type: Option<String>,
   pub address_regex: Option<String>,
   pub asset_id: Option<String>,
 }
@@ -54,8 +54,8 @@ pub struct CoinbaseBuy {
   pub amount: CoinbaseAmount,
   pub total: CoinbaseAmount,
   pub subtotal: CoinbaseAmount,
-  pub created_at: Option<String>,
-  pub updated_at: Option<String>,
+  pub created_at: String,
+  pub updated_at: String,
   pub resource: Option<String>,
   pub resource_path: Option<String>,
   pub committed: bool,
@@ -65,10 +65,101 @@ pub struct CoinbaseBuy {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct CoinbaseReference {
+pub struct CoinbaseTransaction {
   pub id: String,
+  pub r#type: CoinbaseTransactionType,
+  pub status: CoinbaseTransactionStatus,
+  pub amount: CoinbaseAmount,
+  pub native_amount: CoinbaseAmount,
+  pub description: Option<String>,
+  pub created_at: String,
+  pub updated_at: String,
   pub resource: String,
-  pub resource_path: String,
+  pub resource_path: Option<String>,
+  pub buy: Option<CoinbaseReference>,
+  pub to: Option<CoinbaseTransactionRecipient>,
+  pub address: Option<CoinbaseReference>,
+  pub network: Option<CoinbaseNetwork>,
+  pub instant_exchange: bool,
+  pub details: CoinbaseTransactionDetail
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(tag = "resource")]
+pub enum CoinbaseTransactionRecipient {
+  BitcoinAddress { address: String },
+  BitcoinCashAddress { address: String },
+  EthereumAddress { address: String },
+  LitecoinAddress { address: String },
+  Email { email: String },
+  User {
+    id: String,
+    resource_path: String,
+    name: Option<String>,
+    username: Option<String>,
+    profile_location: Option<String>,
+    profile_bio: Option<String>,
+    profile_url: Option<String>
+  },
+  Account {
+    id: String,
+    resource_path: String
+  }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CoinbaseTransactionDetail {
+  title: String,
+  subtitle: String
+}
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CoinbaseNetwork {
+  status: Option<String>,
+  name: Option<String>
+}
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CoinbaseTransactionType {
+  Send,
+  Request,
+  Transfer,
+  Buy,
+  Sell,
+  FiatDeposit,
+  FiatWithdrawal,
+  ExchangeDeposit,
+  ExchangeWithdrawal,
+  VaultWithdrawal,
+  ProDeposit,
+  ProWithdrawal,
+  #[serde(other)]
+  Other,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum CoinbaseTransactionStatus {
+  #[serde(rename = "pending")]
+  Pending,
+  #[serde(rename = "completed")]
+  Completed,
+  #[serde(rename = "failed")]
+  Failed,
+  #[serde(rename = "expired")]
+  Expired,
+  #[serde(rename = "canceled")]
+  Canceled,
+  #[serde(rename = "waiting_for_signature")]
+  WaitingForSignature,
+  #[serde(rename = "waiting_for_clearing")]
+  WaitingForClearing
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CoinbaseReference {
+  pub id: Option<String>,
+  pub resource: String,
+  pub resource_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

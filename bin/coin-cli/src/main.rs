@@ -86,6 +86,11 @@ fn main() {
             writeln!(stderr, "backtrace: {:?}", backtrace).expect(errmsg);
         }
 
+        // match e.0 {
+        //     BinanceLibErrorKind::BinanceError(code, msg, _) => println!("BinanceError({}): {}", code, msg),
+        //     _ => bail!("Unknown error"),
+        // };
+
         ::std::process::exit(1);
     }
 }
@@ -156,7 +161,7 @@ fn run() -> Result<()> {
     let binance_read_client = account_clients.first().unwrap();
     let cmc = CMCClient::new(cmc_key);
     let coin_config: CoinConfig = get_coin_config()?;
-    let sdk = sdk(coin_config)?;
+    let sdk = get_sdk(coin_config)?;
     if let Some(_matches) = matches.subcommand_matches("list_assets") {
         let prices = cmc.latest_listings(100);
         let assets = if let Some(accounts_to_list) = _matches.values_of("account") {
@@ -175,9 +180,9 @@ fn run() -> Result<()> {
         }
     } else if let Some(_matches) = matches.subcommand_matches("save") {
         let prices = cmc.latest_listings(100);
-        for account_client in &account_clients {
-            match account_client.all_accounts() {
-                Ok(balances) => match make_portfolio(&balances, &prices) {
+        for account_client in &sdk.accounts {
+            match account_client.list_assets() {
+                Ok(balances) => match make_portfolio(&accounts(balances), &prices) {
                     Ok(account) => {
                         if let Some(a_t) = &airtable {
                             save_account(&a_t, &account, (*account_client).name());
@@ -371,15 +376,12 @@ fn run() -> Result<()> {
         }
         Ok(())
     } else if let Some(_matches) = matches.subcommand_matches("cost") {
-        let client = CoinbaseClient::new(
-            "yeWEa818KVm8MUhw".to_owned(),
-            "16R1zffQjMuziEqjZiPedEwzhuhlPSJm".to_owned(),
-            "cb".to_owned(),
-            true,
-        );
-        let buys = client.list_all_buys()?;
-        let sum = buys.iter().fold(0f64, |acc, buy| acc + buy.total.amount);
-        println!("Cost basis {}", sum);
+        let cost = sdk.total_costs()?;
+        println!("Portfolio Cost: {:?}", cost);
+        Ok(())
+    } else if let Some(_matches) = matches.subcommand_matches("debug") {
+        let gains = sdk.total_gains()?;
+        println!("Total Gains: {:?}", gains);
         Ok(())
     } else {
         bail!("Unknown command")
@@ -442,34 +444,39 @@ fn get_account_clients(configs: &Vec<AccountConfig>) -> Result<Vec<Box<ExchangeO
     let mut vec_of_clients: Vec<Box<ExchangeOps>> = Vec::new();
     for config in configs {
         let is_read_only = config.readonly.unwrap_or(false);
-        let name: String = config.name.to_owned();
-        match &config.service[..] {
-            "binance" => vec_of_clients.push(Box::new(BinanceClient::new(
-                config.key.to_owned(),
-                config.secret.to_owned(),
-                name,
-                is_read_only,
-            ))),
-            "coinbase" => vec_of_clients.push(Box::new(CoinbaseClient::new(
-                config.key.to_owned(),
-                config.secret.to_owned(),
-                name,
-                is_read_only,
-            ))),
-            "coinbasepro" => {
-                if let Some(passphrase) = &config.passphrase {
-                    vec_of_clients.push(Box::new(CoinbaseProClient::new(
-                        config.key.to_owned(),
-                        config.secret.to_owned(),
-                        passphrase.to_owned(),
+        let name: String = config.name.to_string();
+        match (&config.key, &config.secret) {
+            (Some(k), Some(s)) => {
+                match &config.provider[..] {
+                    "binance" => vec_of_clients.push(Box::new(BinanceClient::new(
+                        k.to_string(),
+                        s.to_string(),
                         name,
                         is_read_only,
-                    )));
-                } else {
-                    bail!("Coinbase Pro accounts must have a passphrase.")
+                    ))),
+                    "coinbase" => vec_of_clients.push(Box::new(CoinbaseClient::new(
+                        k.to_string(),
+                        s.to_string(),
+                        name,
+                        is_read_only,
+                    ))),
+                    "coinbasepro" => {
+                        if let Some(passphrase) = &config.passphrase {
+                            vec_of_clients.push(Box::new(CoinbaseProClient::new(
+                                k.to_string(),
+                                s.to_string(),
+                                passphrase.to_string(),
+                                name,
+                                is_read_only,
+                            )));
+                        } else {
+                            bail!("Coinbase Pro accounts must have a passphrase.")
+                        }
+                    }
+                    _ => continue,
                 }
-            }
-            _ => continue,
+            },
+            _ => continue
         }
     }
     Ok(vec_of_clients)
@@ -686,6 +693,10 @@ fn matches() -> clap::ArgMatches<'static> {
             (about: "Compute cost basis")
             (version: "1.0")
         )
+        (@subcommand debug =>
+            (about: "Debug")
+            (version: "1.0")
+        )
     ).get_matches();
     matches
 }
@@ -842,6 +853,6 @@ fn cmc_listings_as_map<'a>(listing: &'a CMCListingResponse) -> HashMap<String, &
     h_map
 }
 
-fn sdk(conf: CoinConfig) -> Result<SDK> {
+fn get_sdk(conf: CoinConfig) -> Result<SDK> {
     Ok(SDK::new(conf)?)
 }

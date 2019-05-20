@@ -1,9 +1,12 @@
 use std::collections::{HashMap};
+use std::fs::File;
+use std::io::prelude::*;
 use binance::api::*;
 use binance::account::{Account as AccountImpl};
 use binance::market::{Market};
 use binance::model::{Prices};
-use crate::model::{AccountConfig, Asset};
+use binance::wapi::{Wapi};
+use crate::model::{AccountConfig, Asset, Amount};
 use crate::errors::*;
 use crate::account::Account;
 
@@ -11,18 +14,26 @@ pub struct BinanceAccount {
   config: AccountConfig,
   account: AccountImpl,
   market: Market,
+  wapi: Wapi,
   rounding: HashMap<String, i32>,
 }
 
 impl BinanceAccount {
-  pub fn new(config: AccountConfig) -> Self {
-    let account = Binance::new(Some(config.key.to_string()), Some(config.secret.to_string()));
-    let market: Market = Binance::new(None, None);
-    BinanceAccount {
-      config,
-      account,
-      market,
-      rounding: make_rounding_rules(),
+  pub fn new(config: AccountConfig) -> Result<Self> {
+    match (&config.key, &config.secret) {
+      (Some(k), Some(s)) => {
+        let account = Binance::new(Some(k.to_string()), Some(s.to_string()));
+        let market: Market = Binance::new(None, None);
+        let wapi: Wapi = Binance::new(Some(k.to_string()), Some(s.to_string()));
+        Ok(BinanceAccount {
+          config,
+          account,
+          market,
+          wapi,
+          rounding: make_rounding_rules(),
+        })
+      },
+      _ => bail!("Binance account {} requires a key and secret.", &config.name)
     }
   }
 }
@@ -57,7 +68,21 @@ impl Account for BinanceAccount {
     Ok(coerced)
   }
 
+  fn total_costs(&self) -> Result<Amount> {
+    let trades = self.account.trade_history("ETHBTC")?;
+    // let mut file = File::create(format!("{}_ETHBTC_transactions.json", &self.config.name))?;
+    // file.write_all(serde_json::to_string_pretty(&trades)?.as_bytes())?;
+    Ok(Amount { amount: 0.0, currency: "USD".to_string() })
+  }
+
+  fn total_gains(&self) -> Result<Amount> {
+    Ok(Amount { amount: 0.0, currency: "USD".to_string() })
+  }
+
   fn cost_basis(&self) -> Result<()> {
+    let deposits = self.wapi.get_deposit_history()?;
+    let mut file = File::create("binance_deposits.json")?;
+    file.write_all(serde_json::to_string_pretty(&deposits)?.as_bytes())?;
     Ok(())
   }
 

@@ -1,27 +1,9 @@
-[package]
-name = "coin"
-version = "0.1.0"
-authors = ["Michael Paris <motleycapital@protonmail.com>"]
-edition = "2018"
-
-[dependencies]
-clap = "~2.27.0"
-toml = "0.4"
-binance = { git = "https://github.com/wisespace-io/binance-rs.git" }
-reqwest = "~0.9.5"
-colored = "1.6"
-serde = "1.0"
-serde_json = "1.0"
-serde_derive = "1.0"
-prettytable-rs = "^0.8"
-error-chain = "0.12"
-chrono = "0.4"
-dirs = "1.0"
-sha2 = "0.8"
-hmac = "0.7"
-hex = "0.3.2"
-coinbase-pro-rs = "0.3.2"
-dotenv = "0.13.0"
-coinbase = { version = "0.1.0", path = "./lib/coinbase-rs" }
-basis = { version = "0.1.0", path = "./lib/basis-rs" }
-coin_sdk = { version = "0.1.0", path = "./lib/coin-sdk" }
+[workspace]
+members = [
+    "bin/coin-cli",
+    "lib/airtable-rs",
+    "lib/basis-rs",
+    "lib/cmc-rs",
+    "lib/coin-sdk",
+    "lib/coinbase-rs"
+]

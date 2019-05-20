@@ -28,13 +28,12 @@ impl CoinbaseClient {
     for acct in accounts.data {
       let buys: CoinbasePaginatedResource<CoinbaseBuy> = cb.list_buys(&acct.id)?;
       for buy in buys.data.iter() {
-        let created = if let Some(d) = &buy.created_at { d.to_string() } else { "Unknown".to_string() };
         all_buys.push(Buy {
           amount: Amount { amount: buy.amount.amount.parse()?, currency: buy.amount.currency.to_string() },
           fee: Amount { amount: buy.fee.amount.parse()?, currency: buy.fee.currency.to_string() },
           subtotal: Amount { amount: buy.subtotal.amount.parse()?, currency: buy.subtotal.currency.to_string() },
           total: Amount { amount: buy.total.amount.parse()?, currency: buy.total.currency.to_string() },
-          timestamp: created,
+          timestamp: buy.created_at.to_string(),
         });
       }
     }

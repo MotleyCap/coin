@@ -1,5 +1,5 @@
 use crate::errors::*;
-use crate::model::{AccountConfig, Asset};
+use crate::model::{AccountConfig, Asset, Amount};
 
 /**
  * The account is the bridge abstraction.
@@ -14,6 +14,10 @@ pub trait Account {
   fn sell(&self) -> Result<()>;
 
   fn list_assets(&self) -> Result<Vec<Asset>>;
+
+  fn total_costs(&self) -> Result<Amount>;
+
+  fn total_gains(&self) -> Result<Amount>;
 
   fn cost_basis(&self) -> Result<()>;
 

@@ -9,11 +9,13 @@ pub struct CoinConfig {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AccountConfig {
     pub name: String,
-    pub key: String,
-    pub secret: String,
+    pub provider: String,
+    pub key: Option<String>,
+    pub secret: Option<String>,
     pub passphrase: Option<String>,
     pub readonly: Option<bool>,
-    pub service: String,
+    pub asset: Option<String>,
+    pub amount: Option<f64>
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -83,4 +85,10 @@ impl PortfolioBalance {
   pub fn btc(&self) -> f64 {
     (self.value_btc * BTC_FORMAT_MULTIPLIER).round() / BTC_FORMAT_MULTIPLIER
   }
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct Amount {
+  pub amount: f64,
+  pub currency: String
 }

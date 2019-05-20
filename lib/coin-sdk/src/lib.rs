@@ -12,6 +12,7 @@ pub mod account;
 pub mod binance;
 pub mod coinbase;
 pub mod coinbasepro;
+pub mod offline;
 mod client_factory;
 
 #[cfg(test)]

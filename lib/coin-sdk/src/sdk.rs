@@ -2,11 +2,11 @@ use std::collections::{HashMap};
 use crate::model::{CoinConfig, Portfolio};
 use crate::errors::*;
 use crate::account::{Account};
-use crate::model::{Asset};
+use crate::model::{Asset, Amount};
 use crate::client_factory::ClientFactory;
 
 pub struct SDK {
-  accounts: Vec<Box<Account>>,
+  pub accounts: Vec<Box<Account>>,
 }
 
 impl SDK {
@@ -56,6 +56,51 @@ impl SDK {
         .iter()
         .map(|(_, val)| val.clone())
         .collect::<Vec<Asset>>())
+  }
+
+  /**
+   * Returns the total cost sunk into the portfolio.
+   * This will return costs even if no profit has been captured.
+   */
+  pub fn total_costs(&self) -> Result<Amount> {
+    let mut total_cost = 0.0;
+    for account in &self.accounts {
+      let total = account.total_costs()?;
+      total_cost += total.amount;
+    }
+    Ok(Amount { amount: total_cost, currency: "USD".to_string() })
+  }
+
+  /**
+   * Returns the total gains for the portfolio.
+   */
+  pub fn total_gains(&self) -> Result<Amount> {
+    let mut total_gains = 0.0;
+    for account in &self.accounts {
+      let total = account.total_gains()?;
+      total_gains += total.amount;
+    }
+    Ok(Amount { amount: total_gains, currency: "USD".to_string() })
+  }
+
+  /**
+   * Returns the total cost basis for taxable events in the portfolio.
+   */
+  pub fn cost_basis(&self) -> Result<()> {
+    for account in &self.accounts {
+      account.cost_basis()?;
+    }
+    Ok(())
+  }
+
+  /**
+   * Returns the total gains - the cost basis.
+   */
+  pub fn capital_gains(&self) -> Result<()> {
+    for account in &self.accounts {
+      account.capital_gains()?;
+    }
+    Ok(())
   }
 
   fn get_account_clients(config: CoinConfig) -> Result<Vec<Box<Account>>> {

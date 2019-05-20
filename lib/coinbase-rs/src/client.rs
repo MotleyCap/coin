@@ -1,5 +1,6 @@
 use reqwest;
 use reqwest::{Method};
+use serde::ser::Serialize;
 use std::time::SystemTime;
 use hmac::{Hmac,Mac};
 use hex;
@@ -27,9 +28,9 @@ impl Client {
         hex::encode(&mac.result().code())
     }
 
-    fn call_api(&self, method: Method, uri: &str, body_str: &str) -> CoinbaseResult {
+    pub fn get(&self, uri: &str) -> CoinbaseResult {
         let since_epoch_seconds = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).expect("Invalid SystemTime.").as_secs();
-        let signature = Self::sign(&self.secret, since_epoch_seconds, method, uri, body_str);
+        let signature = Self::sign(&self.secret, since_epoch_seconds, Method::GET, uri, "");
         let url = format!("{}{}", BASE_URI, uri);
         let client = reqwest::Client::new();
         client.get(&url)
@@ -38,13 +39,5 @@ impl Client {
             .header("CB-ACCESS-TIMESTAMP", since_epoch_seconds.to_string())
             .header("CB-Version", "2019-02-25")
             .send()
-    }
-
-    pub fn get(&self, uri: &str) -> CoinbaseResult {
-        self.call_api(Method::GET, uri, "")
-    }
-
-    pub fn post(&self, uri: &str, body_str: &str) -> CoinbaseResult {
-        self.call_api(Method::POST, uri, body_str)
     }
 }

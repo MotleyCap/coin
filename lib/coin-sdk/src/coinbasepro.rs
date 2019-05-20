@@ -1,5 +1,5 @@
 use std::collections::{HashMap};
-use crate::model::{AccountConfig, Asset};
+use crate::model::{AccountConfig, Asset, Amount};
 use crate::account::{Account};
 use crate::errors::*;
 use coinbase_pro_rs::{Private, Sync, MAIN_URL};
@@ -11,13 +11,12 @@ pub struct CoinbaseProAccount {
 
 impl CoinbaseProAccount {
   pub fn new(config: AccountConfig) -> Result<CoinbaseProAccount> {
-    if let Some(passphrase) = &config.passphrase {
-      Ok(CoinbaseProAccount {
-        private: Private::new(MAIN_URL, &config.key.to_string(), &config.secret.to_string(), &passphrase),
+    match (&config.passphrase, &config.key, &config.secret) {
+      (Some(ps), Some(k), Some(s)) => Ok(CoinbaseProAccount {
+        private: Private::new(MAIN_URL, k, s, ps),
         config,
-      })
-    } else {
-      bail!("CoinbasePro accounts require a passphrase")
+      }),
+      _ => bail!("CoinbasePro accounts requires a key, secret, and passphrase")
     }
   }
 }
@@ -47,6 +46,14 @@ impl Account for CoinbaseProAccount {
       Err(e) => bail!("Error fetching coinbase pro assets {:?}", e)
     };
     Ok(results)
+  }
+
+  fn total_costs(&self) -> Result<Amount> {
+    Ok(Amount { amount: 0.0, currency: "USD".to_string() })
+  }
+
+  fn total_gains(&self) -> Result<Amount> {
+    Ok(Amount { amount: 0.0, currency: "USD".to_string() })
   }
 
   fn cost_basis(&self) -> Result<()> {
